@@ -225,7 +225,7 @@ namespace GioviGG {
       string tag=Convert.ToString(root["tag_name"]);
       Version remote;
       if(!Version.TryParse(tag.TrimStart('v','V'),out remote)) throw new Exception("Neplatné číslo verze.");
-      if(remote<=new Version(CurrentVersion)) return null;
+      if(remote.CompareTo(new Version(CurrentVersion)) <= 0) return null;
       object[] assets=root.ContainsKey("assets")?root["assets"] as object[]:null;
       if(assets==null) throw new Exception("Release nemá přiložené soubory.");
       foreach(object obj in assets){
