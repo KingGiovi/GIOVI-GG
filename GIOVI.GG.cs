@@ -13,9 +13,10 @@ using System.Text;
 using System.Web.Script.Serialization;
 using Microsoft.Win32;
 using System.Reflection;
+using System.Net.Sockets;
 
-[assembly: AssemblyVersion("0.6.0.0")]
-[assembly: AssemblyFileVersion("0.6.0.0")]
+[assembly: AssemblyVersion("0.7.0.0")]
+[assembly: AssemblyFileVersion("0.7.0.0")]
 
 namespace GioviGG {
   class Match { public string Game, Date, Result; public int Kills, Deaths, Assists; public string MatchId="", Champion="", Queue="", Source="Manual"; public int Duration; }
@@ -101,7 +102,7 @@ namespace GioviGG {
           using(WebClient wc=new WebClient()) {
             wc.Encoding=Encoding.UTF8;
             wc.Headers["X-Riot-Token"]=key;
-            wc.Headers[HttpRequestHeader.UserAgent]="GioviGG/0.6.0 (personal stats tracker)";
+            wc.Headers[HttpRequestHeader.UserAgent]="GioviGG/0.7.0 (personal stats tracker)";
             return wc.DownloadString(url);
           }
         } catch(WebException ex) {
@@ -180,6 +181,178 @@ namespace GioviGG {
       return found;
     }
   }
+
+  // Valve CS2 Game State Integration. Localhost only; it never accesses game memory.
+  // CS2 sends snapshots to 127.0.0.1:29876. No third-party server or API key.
+  class Cs2State {
+    public DateTime SeenUtc=DateTime.MinValue;
+    public string Map="", Mode="", Phase="", Team="";
+    public int Kills, Deaths, Assists, Ct, T;
+    public bool HasStats;
+  }
+  class Cs2GsiReceiver : IDisposable {
+    public const int Port=29876;
+    readonly string token;
+    readonly Action<Cs2State,Match> onUpdate;
+    TcpListener listener;
+    volatile bool stopping;
+    Cs2State state=new Cs2State();
+    string currentMap="", providerSteamId="", playerSteamId="";
+    bool sawLive, recorded;
+    DateTime matchStarted=DateTime.MinValue;
+    public Cs2GsiReceiver(string folder, Action<Cs2State,Match> callback){
+      onUpdate=callback;
+      string tokenPath=Path.Combine(folder,"cs2-gsi-token.txt");
+      if(File.Exists(tokenPath)) token=File.ReadAllText(tokenPath).Trim();
+      else { token=Guid.NewGuid().ToString("N")+Guid.NewGuid().ToString("N"); File.WriteAllText(tokenPath,token,Encoding.ASCII); }
+      if(token.Length<32) throw new Exception("CS2 GSI token je neplatný; smaž cs2-gsi-token.txt a znovu spusť tracker.");
+    }
+    public void Start(){
+      stopping=false;
+      listener=new TcpListener(IPAddress.Loopback,Port);
+      listener.Start();
+      Task.Run(()=>Loop());
+    }
+    public string ConfigText {
+      get {
+        return "\"GIOVI.GG CS2 integration\"\r\n{\r\n"+
+          "  \"uri\" \"http://127.0.0.1:"+Port+"/\"\r\n"+
+          "  \"timeout\" \"5.0\"\r\n  \"buffer\" \"0.1\"\r\n  \"throttle\" \"0.5\"\r\n  \"heartbeat\" \"15.0\"\r\n"+
+          "  \"auth\" { \"token\" \""+token+"\" }\r\n"+
+          "  \"data\"\r\n  {\r\n"+
+          "    \"provider\" \"1\"\r\n    \"map\" \"1\"\r\n    \"round\" \"1\"\r\n"+
+          "    \"player_id\" \"1\"\r\n    \"player_match_stats\" \"1\"\r\n  }\r\n}\r\n";
+      }
+    }
+    public void InstallConfig(string cfgFolder){
+      DirectoryInfo di=new DirectoryInfo(cfgFolder);
+      if(!di.Exists || !di.Name.Equals("cfg",StringComparison.OrdinalIgnoreCase) ||
+         di.Parent==null || !di.Parent.Name.Equals("csgo",StringComparison.OrdinalIgnoreCase) ||
+         di.Parent.Parent==null || !di.Parent.Parent.Name.Equals("game",StringComparison.OrdinalIgnoreCase))
+        throw new Exception("Vyber složku CS2: ...\\Counter-Strike Global Offensive\\game\\csgo\\cfg");
+      string file=Path.Combine(cfgFolder,"gamestate_integration_giovigg.cfg");
+      File.WriteAllText(file,ConfigText,new UTF8Encoding(false));
+    }
+    static Dictionary<string,object> Dict(object o){return o as Dictionary<string,object>;}
+    static object Val(Dictionary<string,object> d,string key){return d!=null&&d.ContainsKey(key)?d[key]:null;}
+    static string Str(object o){return o==null?"":Convert.ToString(o,System.Globalization.CultureInfo.InvariantCulture);}
+    static int Number(object o){int n;return int.TryParse(Str(o),out n)?Math.Max(0,n):0;}
+    static bool Has(Dictionary<string,object> d,string key){return d!=null&&d.ContainsKey(key);}
+    void Loop(){
+      while(!stopping){
+        try {
+          using(TcpClient c=listener.AcceptTcpClient()) Handle(c);
+        }catch(SocketException){if(stopping)return;System.Threading.Thread.Sleep(200);}
+        catch(ObjectDisposedException){return;}
+        catch(Exception){if(stopping)return;System.Threading.Thread.Sleep(150);}
+      }
+    }
+    static void Answer(NetworkStream stream,bool success){
+      try {
+        string message=success?"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nOK":
+          "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        byte[] bytes=Encoding.ASCII.GetBytes(message);
+        stream.Write(bytes,0,bytes.Length);stream.Flush();
+      }catch(IOException){}
+    }
+    void Handle(TcpClient client){
+      client.ReceiveTimeout=4000;client.SendTimeout=4000;
+      using(NetworkStream stream=client.GetStream()){
+        // Bounded request: only POST and at most 256 KiB, sent locally by CS2.
+        List<byte> header=new List<byte>(); int b; int end=0;
+        while(header.Count<16384 && (b=stream.ReadByte())!=-1){
+          header.Add((byte)b);
+          end=b==13&&end==0?1:b==10&&end==1?2:b==13&&end==2?3:b==10&&end==3?4:0;
+          if(end==4)break;
+        }
+        if(end!=4){Answer(stream,false);return;}
+        string raw=Encoding.ASCII.GetString(header.ToArray());
+        if(!raw.StartsWith("POST / HTTP/",StringComparison.OrdinalIgnoreCase)){Answer(stream,false);return;}
+        int length=-1;
+        foreach(string item in raw.Split(new string[]{"\r\n"},StringSplitOptions.RemoveEmptyEntries)){
+          if(item.StartsWith("Content-Length:",StringComparison.OrdinalIgnoreCase)){
+            int.TryParse(item.Substring(15).Trim(),out length);
+          }
+        }
+        if(length<2 || length>262144){Answer(stream,false);return;}
+        byte[] bytes=new byte[length];int offset=0;
+        while(offset<length){int read=stream.Read(bytes,offset,length-offset);if(read<=0)break;offset+=read;}
+        if(offset!=length){Answer(stream,false);return;}
+        Dictionary<string,object> json=null;
+        try {
+          JavaScriptSerializer parser=new JavaScriptSerializer();
+          parser.MaxJsonLength=262144;
+          json=Dict(parser.DeserializeObject(Encoding.UTF8.GetString(bytes)));
+        }catch(Exception){Answer(stream,false);return;}
+        if(Str(Val(Dict(Val(json,"auth")),"token"))!=token){Answer(stream,false);return;}
+        Answer(stream,true);
+        ProcessPayload(json);
+      }
+    }
+    void ProcessPayload(Dictionary<string,object> data){
+      Dictionary<string,object> map=Dict(Val(data,"map")), player=Dict(Val(data,"player"));
+      Dictionary<string,object> provider=Dict(Val(data,"provider"));
+      if(map!=null){
+        if(Has(map,"name"))state.Map=Str(Val(map,"name"));
+        if(Has(map,"mode"))state.Mode=Str(Val(map,"mode"));
+        if(Has(map,"phase"))state.Phase=Str(Val(map,"phase"));
+        var ct=Dict(Val(map,"team_ct"));var t=Dict(Val(map,"team_t"));
+        if(Has(ct,"score"))state.Ct=Number(Val(ct,"score"));
+        if(Has(t,"score"))state.T=Number(Val(t,"score"));
+      }
+      if(Has(provider,"steamid"))providerSteamId=Str(Val(provider,"steamid"));
+      if(player!=null){
+        if(Has(player,"steamid"))playerSteamId=Str(Val(player,"steamid"));
+        bool own=Has(player,"steamid") && providerSteamId.Length>0 && playerSteamId==providerSteamId;
+        if(own){
+          if(Has(player,"team"))state.Team=Str(Val(player,"team"));
+          var stats=Dict(Val(player,"match_stats"));
+          if(stats!=null && Has(stats,"kills") && Has(stats,"deaths") && Has(stats,"assists")){
+            state.Kills=Number(Val(stats,"kills"));
+            state.Deaths=Number(Val(stats,"deaths"));
+            state.Assists=Number(Val(stats,"assists"));
+            state.HasStats=true;
+          }
+        }
+      }
+      state.SeenUtc=DateTime.UtcNow;
+      if(state.Phase.Equals("live",StringComparison.OrdinalIgnoreCase) && state.Map.Length>0 &&
+         (!sawLive || recorded || !state.Map.Equals(currentMap,StringComparison.OrdinalIgnoreCase))){
+        currentMap=state.Map;matchStarted=DateTime.UtcNow;sawLive=true;recorded=false;state.HasStats=false;
+        state.Kills=0;state.Deaths=0;state.Assists=0;
+        // If the first live payload includes our own stats, keep them for this session.
+        bool own=Has(player,"steamid") && providerSteamId.Length>0 && playerSteamId==providerSteamId;
+        var stats=own?Dict(Val(player,"match_stats")):null;
+        if(stats!=null && Has(stats,"kills") && Has(stats,"deaths") && Has(stats,"assists")){
+          state.Kills=Number(Val(stats,"kills"));state.Deaths=Number(Val(stats,"deaths"));
+          state.Assists=Number(Val(stats,"assists"));state.HasStats=true;
+        }
+      }
+      Match completed=null;
+      if(sawLive && !recorded && state.Phase.Equals("gameover",StringComparison.OrdinalIgnoreCase)){
+        recorded=true; // one record per observed match, never on every heartbeat
+        bool ct=state.Team.Equals("CT",StringComparison.OrdinalIgnoreCase);
+        bool t=state.Team.Equals("T",StringComparison.OrdinalIgnoreCase);
+        // Deathmatch and modes without team scores do not have a reliable W/L result.
+        bool teamGame=!state.Mode.Equals("deathmatch",StringComparison.OrdinalIgnoreCase);
+        if(state.HasStats && (ct||t) && state.Map.Length>0 && teamGame && (state.Ct>0 || state.T>0)){
+          int ours=ct?state.Ct:state.T, theirs=ct?state.T:state.Ct;
+          string result=ours==theirs?"Draw":ours>theirs?"Win":"Loss";
+          completed=new Match {Game="CS2",Date=DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),Result=result,
+            Kills=state.Kills,Deaths=state.Deaths,Assists=state.Assists,Queue=state.Map+" · "+state.Mode,
+            Source="CS2 GSI",MatchId="CS2-GSI-"+Guid.NewGuid().ToString("N"),
+            Duration=matchStarted==DateTime.MinValue?0:(int)Math.Max(0,Math.Min(21600,(DateTime.UtcNow-matchStarted).TotalSeconds))};
+        }
+      }
+      if(onUpdate!=null){
+        Cs2State report=new Cs2State {SeenUtc=state.SeenUtc,Map=state.Map,Mode=state.Mode,Phase=state.Phase,
+          Team=state.Team,Kills=state.Kills,Deaths=state.Deaths,Assists=state.Assists,Ct=state.Ct,T=state.T,HasStats=state.HasStats};
+        onUpdate(report,completed);
+      }
+    }
+    public void Dispose(){stopping=true;try{if(listener!=null)listener.Stop();}catch(Exception){}}
+  }
+
   class Achievement {
     public string Name, Description;
     public long Progress, Goal;
@@ -250,7 +423,7 @@ namespace GioviGG {
   }
 
   class App : Form {
-    const string CurrentVersion = "0.6.0";
+    const string CurrentVersion = "0.7.0";
     const string ReleaseApi = "https://api.github.com/repos/KingGiovi/GIOVI-GG/releases/latest";
     UpdateInfo availableUpdate;
     bool updateBusy = false;
@@ -264,6 +437,10 @@ namespace GioviGG {
     Dictionary<string, long> runningSeconds = new Dictionary<string,long>();
     Storage store = new Storage();
     RiotConfig riot;
+    Cs2GsiReceiver cs2Receiver;
+    Cs2State cs2State=new Cs2State();
+    string cs2Status="CS2 GSI: čekám na první data.";
+    Label cs2LiveLabel;
     bool riotSyncBusy=false;
     string riotStatus="Nepřipojeno. Přidej svůj Riot API klíč.";
     DateTime lastRiotAttempt=DateTime.MinValue;
@@ -283,7 +460,7 @@ namespace GioviGG {
     bool exiting = false;
     public App() {
       riot=new RiotConfig(store.Folder);
-      Text = "GIOVI.GG — Ultimate Gaming Hub v0.6.0"; Width = 1160; Height = 780; MinimumSize = new Size(1020,640); StartPosition = FormStartPosition.CenterScreen; BackColor = bg; ForeColor = fg; Font = new Font("Segoe UI", 10f);
+      Text = "GIOVI.GG — Ultimate Gaming Hub v0.7.0"; Width = 1160; Height = 780; MinimumSize = new Size(1020,640); StartPosition = FormStartPosition.CenterScreen; BackColor = bg; ForeColor = fg; Font = new Font("Segoe UI", 10f);
       // Fixed two-column layout: sidebar occupies its own column, never overlays content.
       TableLayoutPanel shell = new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=2, RowCount=1, Margin=new Padding(0), Padding=new Padding(0), BackColor=bg };
       shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,210));
@@ -320,6 +497,14 @@ namespace GioviGG {
       content.Resize+=(s,e)=>{ if (WindowState==FormWindowState.Normal && content!=null && content.Width>400 && content.Height>300) ShowPage(page); };
       Resize+=(s,e)=>{ if (WindowState==FormWindowState.Minimized) { Hide();tray.BalloonTipTitle="GIOVI.GG";tray.BalloonTipText="Sledování her běží dál na pozadí.";tray.ShowBalloonTip(1500); } };
       FormClosing+=(s,e)=>{if(!exiting){e.Cancel=true;WindowState=FormWindowState.Minimized;Hide();}};
+      try {
+        cs2Receiver=new Cs2GsiReceiver(store.Folder,(s,m)=>{
+          if(IsDisposed || !IsHandleCreated)return;
+          try {BeginInvoke((Action)(()=>ReceiveCs2(s,m)));}catch(InvalidOperationException){}
+        });
+        cs2Receiver.Start();
+        cs2Status="CS2 GSI listener připraven (127.0.0.1:29876). Nastav CS2 v Nastavení → Propojení.";
+      }catch(Exception ex){cs2Status="CS2 GSI listener nelze spustit: "+ex.Message;}
       Scan();ShowPage("Overview");
       // Run the API request off the UI thread and notify once per launch if a newer release exists.
       Shown += (sender, args) => BeginUpdateCheck(true);
@@ -359,6 +544,7 @@ namespace GioviGG {
     Panel Metric(Control parent,string label,string value,int x,int y,int width,int height,Color valueColor) {
       Panel panel=Surface(parent,x,y,width,height,card);
       Surface(panel,0,0,3,height,valueColor);
+      Surface(panel,3,0,width-3,1,Color.FromArgb(72,69,99));
       Copy(panel,label.ToUpperInvariant(),16,13,width-27,19,8.5f,muted,true);
       Copy(panel,value,16,33,width-25,Math.Max(30,height-36),height>=85?21f:16f,valueColor,true);
       return panel;
@@ -566,6 +752,8 @@ namespace GioviGG {
       int losses=all.Count(m=>m.Result=="Loss");
       long xp=wins*100L+losses*30L+all.Sum(m=>(long)m.Kills)*5L+all.Sum(m=>(long)m.Assists)*2L;
       Panel hero=Surface(content,x,15,w,104,shade);
+      Surface(hero,0,0,5,104,accent);
+      Surface(hero,6,0,w-6,2,Color.FromArgb(82,62,120));
       Copy(hero,"GIOVI  /  LEVEL "+(1+xp/1000),20,14,w-38,35,20,accent,true);
       Copy(hero,xp.ToString("N0")+" XP CELKEM",20,54,220,20,9,muted,true);
       List<Achievement> achieved=GetAchievements();
@@ -590,6 +778,8 @@ namespace GioviGG {
         Copy(tile,names[i],16,46,gW-25,24,10,fg,true);
         int gm=Of(game).Count;int gw=Of(game).Count(m=>m.Result=="Win");
         Copy(tile,gm+" zápasů  •  "+(gm==0?"—":(gw*100.0/gm).ToString("0")+" % WR"),16,74,gW-25,23,9,muted,false);
+        if(game=="CS2" && cs2State.SeenUtc!=DateTime.MinValue && DateTime.UtcNow-cs2State.SeenUtc<TimeSpan.FromSeconds(40))
+          Copy(tile,"● CS2 GSI LIVE",Math.Max(115,gW-153),14,137,21,8,green,true).TextAlign=ContentAlignment.MiddleRight;
         ButtonAt(tile,"OTEVŘÍT STATISTIKY  →",13,105,gW-26,28,()=>ShowPage(games[idx]),false);
       }
       int bottomY=424;
@@ -651,11 +841,18 @@ namespace GioviGG {
         ButtonAt(connection,"PROPOJIT ÚČET",12,boxH-83,rightWidth-24,33,()=>ConfigureRiot(),false);
         Button sync=ButtonAt(connection,riotSyncBusy?"SYNCHRONIZUJI...":"SYNCHRONIZOVAT",12,boxH-43,rightWidth-24,33,()=>TrySyncLoL(false),true);
         sync.Enabled=!riotSyncBusy;
+      }else if(game=="CS2"){
+        Copy(connection,"CS2  •  LIVE GAME STATE",14,13,rightWidth-28,25,10,accent,true);
+        Rule(connection,13,43,rightWidth-26,line);
+        cs2LiveLabel=Copy(connection,Cs2LiveText(),14,55,rightWidth-28,Math.Max(70,boxH-145),10,fg,false);
+        cs2LiveLabel.AutoEllipsis=false;
+        Copy(connection,"Automatický zápis výsledků vyžaduje GSI a konec zápasu.",14,Math.Max(119,boxH-85),rightWidth-26,31,8,muted,false);
+        ButtonAt(connection,"NASTAVIT CS2 GSI",12,boxH-44,rightWidth-24,34,()=>ConfigureCs2Gsi(),true);
       }else{
         Copy(connection,"SLEDOVÁNÍ HRY",14,14,rightWidth-28,25,10,accent,true);
         Rule(connection,13,47,rightWidth-26,line);
         Copy(connection,"Herní čas se ukládá automaticky.",13,61,rightWidth-26,60,10,fg,false).AutoEllipsis=false;
-        Copy(connection,"Výsledky zápasů prozatím zadávej ručně.",13,124,rightWidth-26,54,9,muted,false).AutoEllipsis=false;
+        Copy(connection,"Výsledky Rainbow Six Siege zatím zadávej ručně.",13,124,rightWidth-26,54,9,muted,false).AutoEllipsis=false;
         ButtonAt(connection,"+ PŘIDAT ZÁPAS",12,boxH-45,rightWidth-24,34,()=>AddMatch(game),true);
       }
     }
@@ -706,7 +903,7 @@ namespace GioviGG {
       return rows.OrderByDescending(m=>m.Date).ToList();
     }
     void RefreshHistory(){
-      if(historyListPanel==null || historyListPanel.IsDisposed)return;
+      if(historyListPanel==null || historyListPanel.IsDisposed || historyListPanel.Width<210 || historyListPanel.Height<90)return;
       List<Match> rows=FilterHistory();
       if(historyCount!=null&&!historyCount.IsDisposed)historyCount.Text=rows.Count+" ZÁPASŮ";
       foreach(Control control in historyListPanel.Controls.Cast<Control>().ToArray()){
@@ -715,31 +912,71 @@ namespace GioviGG {
       MatchList(historyListPanel,rows,12,12,Math.Max(180,historyListPanel.Width-24),Math.Max(80,historyListPanel.Height-24),rows.Count);
     }
     void BuildHistory(){
-      int w=ViewWidth,h=ViewHeight,x=24;
-      Tabs(new string[]{"VŠE","LOL","CS2","R6"},new string[]{"All","LoL","CS2","R6"},historyFilter,12,
-        selected=>{historyFilter=selected;ShowPage("History");});
-      int filterWidth=Math.Min(236,Math.Max(150,(w-30)/3));
-      ComboBox result=new ComboBox { Location=new Point(x,65),Size=new Size(filterWidth,32),
-        DropDownStyle=ComboBoxStyle.DropDownList,FlatStyle=FlatStyle.Flat,BackColor=shade,ForeColor=fg,Font=new Font("Segoe UI",10) };
+      // The filter toolbar is its own fixed row. Only the match list scrolls.
+      // This avoids previous absolute positioning/dock overlap and clipped inputs.
+      TableLayoutPanel stack=new TableLayoutPanel {
+        Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=new Padding(0),Padding=new Padding(0),
+        BackColor=bg
+      };
+      stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+      stack.RowStyles.Add(new RowStyle(SizeType.Absolute,166));
+      stack.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+      content.Controls.Add(stack);
+      Panel tools=new Panel{Dock=DockStyle.Fill,Margin=new Padding(12,0,12,0),BackColor=bg};
+      stack.Controls.Add(tools,0,0);
+      Panel results=new Panel{Dock=DockStyle.Fill,Margin=new Padding(12,0,12,10),BackColor=card,Padding=new Padding(8)};
+      stack.Controls.Add(results,0,1);
+      int widths=Math.Max(680,content.ClientSize.Width-24);
+      int rowWidth=widths-24;
+      string[] names={"VŠE","LEAGUE OF LEGENDS","CS2","R6 SIEGE"};
+      string[] keys={"All","LoL","CS2","R6"};
+      int tabX=12;
+      for(int i=0;i<keys.Length;i++){
+        string chosen=keys[i];int tabW=i==1?156:115;
+        Button b=ButtonAt(tools,names[i],tabX,7,tabW,35,()=>{historyFilter=chosen;ShowPage("History");},historyFilter==chosen);
+        if(historyFilter==chosen){b.BackColor=accent;b.ForeColor=bg;}else {b.BackColor=shade;b.ForeColor=fg;}
+        tabX+=tabW+9;
+      }
+      int comboW=Math.Max(150,Math.Min(215,(rowWidth-310)/3));
+      Label l1=Copy(tools,"VÝSLEDEK",12,51,comboW,20,8,muted,true);
+      Label l2=Copy(tools,"OBDOBÍ",23+comboW,51,comboW,20,8,muted,true);
+      int searchX=34+2*comboW;
+      Copy(tools,"HLEDAT ŠAMPIONA / MAPU / MATCH ID",searchX,51,Math.Max(160,rowWidth-searchX),20,8,muted,true);
+      ComboBox result=new ComboBox {
+        Location=new Point(12,76),Size=new Size(comboW,32),DropDownStyle=ComboBoxStyle.DropDownList,
+        FlatStyle=FlatStyle.Flat,BackColor=shade,ForeColor=fg,Font=new Font("Segoe UI",10)
+      };
       result.Items.AddRange(new object[]{"Všechny výsledky","Jen výhry","Jen prohry"});
       result.SelectedIndex=historyResult=="Win"?1:historyResult=="Loss"?2:0;
-      content.Controls.Add(result);
-      result.SelectedIndexChanged+=(sender,args)=>{historyResult=result.SelectedIndex==1?"Win":result.SelectedIndex==2?"Loss":"All";RefreshHistory();};
-      ComboBox period=new ComboBox { Location=new Point(x+filterWidth+12,65),Size=new Size(filterWidth,32),
-        DropDownStyle=ComboBoxStyle.DropDownList,FlatStyle=FlatStyle.Flat,BackColor=shade,ForeColor=fg,Font=new Font("Segoe UI",10) };
+      tools.Controls.Add(result);
+      result.SelectedIndexChanged+=(sender,args)=>{
+        historyResult=result.SelectedIndex==1?"Win":result.SelectedIndex==2?"Loss":"All";RefreshHistory();
+      };
+      ComboBox period=new ComboBox {
+        Location=new Point(23+comboW,76),Size=new Size(comboW,32),DropDownStyle=ComboBoxStyle.DropDownList,
+        FlatStyle=FlatStyle.Flat,BackColor=shade,ForeColor=fg,Font=new Font("Segoe UI",10)
+      };
       period.Items.AddRange(new object[]{"Celá historie","Posledních 7 dní","Posledních 30 dní"});
       period.SelectedIndex=historyPeriod=="7D"?1:historyPeriod=="30D"?2:0;
-      content.Controls.Add(period);
-      period.SelectedIndexChanged+=(sender,args)=>{historyPeriod=period.SelectedIndex==1?"7D":period.SelectedIndex==2?"30D":"All";RefreshHistory();};
-      TextBox search=new TextBox {Location=new Point(x+2*(filterWidth+12),67),Size=new Size(Math.Max(138,w-2*(filterWidth+12)),30),
-        Font=new Font("Segoe UI",11),BackColor=shade,ForeColor=fg,BorderStyle=BorderStyle.FixedSingle,Text=historySearch};
-      content.Controls.Add(search);
+      tools.Controls.Add(period);
+      period.SelectedIndexChanged+=(sender,args)=>{
+        historyPeriod=period.SelectedIndex==1?"7D":period.SelectedIndex==2?"30D":"All";RefreshHistory();
+      };
+      TextBox search=new TextBox{
+        Location=new Point(searchX,77),Size=new Size(Math.Max(165,rowWidth-searchX-14),30),
+        Font=new Font("Segoe UI",11),BackColor=shade,ForeColor=fg,BorderStyle=BorderStyle.FixedSingle,Text=historySearch
+      };
+      tools.Controls.Add(search);
       search.TextChanged+=(sender,args)=>{historySearch=search.Text;RefreshHistory();};
-      historyCount=Copy(content,"",x,116,180,26,11,fg,true);
-      Copy(content,"Hledej šampiona / mód / Match ID",x+188,116,Math.Max(100,w-520),24,9,muted,false);
-      ButtonAt(content,"EXPORT CSV",x+w-294,111,135,34,()=>ExportCsv(),false);
-      ButtonAt(content,"SMAZAT POSLEDNÍ",x+w-149,111,149,34,()=>DeleteMatch(),false);
-      historyListPanel=Surface(content,x,153,w,Math.Max(170,h-158),card);
+      historyCount=Copy(tools,"",12,130,170,25,11,fg,true);
+      Copy(tools,"FILTROVÁNÍ ZŮSTÁVÁ VŽDY NAHOŘE",171,133,Math.Max(140,rowWidth-520),22,8,muted,true);
+      ButtonAt(tools,"EXPORT CSV",rowWidth-296,123,137,34,()=>ExportCsv(),false);
+      ButtonAt(tools,"SMAZAT POSLEDNÍ",rowWidth-149,123,149,34,()=>DeleteMatch(),false);
+      historyListPanel=new Panel{Dock=DockStyle.Fill,BackColor=card};
+      results.Controls.Add(historyListPanel);
+      historyListPanel.Resize+=(sender,args)=>{
+        if(historyListPanel!=null && !historyListPanel.IsDisposed && historyListPanel.Width>220)RefreshHistory();
+      };
       RefreshHistory();
     }
     void BuildSettings(){
@@ -754,8 +991,8 @@ namespace GioviGG {
         Button check=ButtonAt(area,updateBusy?"KONTROLUJI...":"CHECK FOR UPDATES",20,185,222,40,()=>BeginUpdateCheck(false),true);check.Enabled=!updateBusy;
         if(availableUpdate!=null){Button install=ButtonAt(area,"INSTALL v"+availableUpdate.Number.ToString(),256,185,216,40,()=>StartUpdate(),false);install.Enabled=!updateBusy;}
         Rule(area,20,247,width-40,line);
-        Copy(area,"Novinky ve verzi 0.6.0",20,264,width-40,26,11,fg,true);
-        Copy(area,"NOVĚ: Analýza výkonu podle hry a období, graf formy, série výher, achievementy, pokročilé filtry historie, vyhledávání a detail zápasu.",20,298,width-44,76,10,muted,false).AutoEllipsis=false;
+        Copy(area,"Novinky ve verzi 0.7.0",20,264,width-40,26,11,fg,true);
+        Copy(area,"NOVĚ: CS2 Game State Integration (živá K/D/A a detekce konce zápasu), připnuté filtry historie, modernizovaný přehled, lepší orientace a zachované statistiky.",20,298,width-44,76,10,muted,false).AutoEllipsis=false;
       }else if(settingsTab=="Connect"){
         Copy(area,"LEAGUE OF LEGENDS",20,20,width-40,30,13,accent,true);
         Copy(area,riot.GameName+"#"+riot.TagLine+"  •  "+riot.Region.ToUpperInvariant(),20,60,width-40,27,12,fg,true);
@@ -763,9 +1000,11 @@ namespace GioviGG {
         ButtonAt(area,"RIOT ÚČET / API KEY",20,162,232,40,()=>ConfigureRiot(),true);
         Button sync=ButtonAt(area,riotSyncBusy?"SYNCHRONIZUJI...":"SYNC MATCHES",265,162,202,40,()=>TrySyncLoL(false),false);sync.Enabled=!riotSyncBusy;
         Rule(area,20,226,width-40,line);
-        Copy(area,"CS2 + R6 SIEGE",20,245,width-40,25,12,fg,true);
-        Copy(area,"Automaticky sledujeme spuštěnou hru a její čas. Automatický import výsledků zatím není dostupný.",20,283,width-42,72,10,muted,false).AutoEllipsis=false;
-        Copy(area,"API klíč se neukládá na disk ani do GitHubu.",20,373,width-40,28,9,muted,false);
+        Copy(area,"COUNTER-STRIKE 2 • GSI",20,237,width-40,25,12,fg,true);
+        Copy(area,"Živá K/D/A a skóre přímo z CS2. Při zachyceném konci zápasu uložíme výsledek. Bez zásahů do hry.",20,269,width-42,48,9,muted,false).AutoEllipsis=false;
+        ButtonAt(area,"NASTAVIT CS2 GSI",20,322,220,38,()=>ConfigureCs2Gsi(),true);
+        Copy(area,cs2Status,257,320,Math.Max(160,width-284),72,9,muted,false).AutoEllipsis=false;
+        Copy(area,"R6 Siege: nyní automaticky pouze herní čas · Riot API klíč zůstává v paměti.",20,403,width-40,32,9,muted,false);
       }else{
         Copy(area,"MOJE DATA",20,20,width-40,28,13,accent,true);
         Copy(area,"Statistiky jsou uložené lokálně na tvém počítači.",20,59,width-40,40,10,muted,false);
@@ -1063,6 +1302,49 @@ namespace GioviGG {
         ExitApp();
       }catch(Exception ex){updateBusy=false;updateMessage="Instalace selhala: "+ex.Message;if(page=="Settings")ShowPage("Settings");MessageBox.Show(this,ex.Message,"GIOVI.GG updater",MessageBoxButtons.OK,MessageBoxIcon.Error);}
     }
+    void ReceiveCs2(Cs2State snapshot,Match completed){
+      cs2State=snapshot;
+      cs2Status="CS2 GSI: "+snapshot.Map+" / "+snapshot.Phase+" · "+snapshot.Kills+" / "+snapshot.Deaths+" / "+snapshot.Assists;
+      if(completed!=null){
+        if(!store.Matches.Any(m=>m.MatchId==completed.MatchId)){
+          store.Matches.Add(completed);
+          try {store.Save();cs2Status="CS2 GSI: zápas na "+snapshot.Map+" uložen ("+completed.Result+").";}
+          catch(Exception ex){store.Matches.Remove(completed);cs2Status="CS2 GSI: chyba uložení: "+ex.Message;}
+        }
+        if(page=="CS2"||page=="Overview"||page=="History"||page=="Analytics")ShowPage(page);
+      }
+      if(cs2LiveLabel!=null && !cs2LiveLabel.IsDisposed)cs2LiveLabel.Text=Cs2LiveText();
+    }
+    string Cs2LiveText(){
+      if(cs2State.SeenUtc==DateTime.MinValue || DateTime.UtcNow-cs2State.SeenUtc>TimeSpan.FromSeconds(40))
+        return "Čekám na data z CS2. V Nastavení → Propojení nainstaluj GSI konfiguraci a restartuj CS2.";
+      return "MAPA: "+cs2State.Map+"
+FÁZE: "+cs2State.Phase+"     SKÓRE CT/T: "+cs2State.Ct+" : "+cs2State.T+
+        "
+TVÉ K/D/A: "+cs2State.Kills+" / "+cs2State.Deaths+" / "+cs2State.Assists;
+    }
+    void ConfigureCs2Gsi(){
+      if(cs2Receiver==null){MessageBox.Show(this,cs2Status,"CS2 GSI",MessageBoxButtons.OK,MessageBoxIcon.Warning);return;}
+      if(MessageBox.Show(this,"Vybereme složku CS2 ...\\game\\csgo\\cfg a vložíme do ní lokální GSI konfigurační soubor.\nCS2 musíš potom úplně restartovat.\n\nPokračovat?",
+        "GIOVI.GG — CS2 GSI",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+      using(FolderBrowserDialog dialog=new FolderBrowserDialog()){
+        dialog.Description="Vyber CS2 složku game\\csgo\\cfg (Steam → CS2 → Spravovat → Procházet místní soubory)";
+        string defaultCfg=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+          @"Steam\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg");
+        if(Directory.Exists(defaultCfg))dialog.SelectedPath=defaultCfg;
+        if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+        try {
+          string file=Path.Combine(dialog.SelectedPath,"gamestate_integration_giovigg.cfg");
+          if(File.Exists(file) && MessageBox.Show(this,"Konfigurace už existuje. Přepsat?","CS2 GSI",
+            MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+          cs2Receiver.InstallConfig(dialog.SelectedPath);
+          cs2Status="CS2 GSI: konfigurace nainstalována. Restartuj CS2 a potom spusť zápas.";
+          MessageBox.Show(this,"Hotovo! Soubor gamestate_integration_giovigg.cfg je na místě.\n\nÚPLNĚ restartuj CS2. GIOVI.GG musí běžet na pozadí.",
+            "CS2 GSI nastaveno",MessageBoxButtons.OK,MessageBoxIcon.Information);
+          if(page=="Settings" || page=="CS2")ShowPage(page);
+        }catch(Exception ex){MessageBox.Show(this,ex.Message,"CS2 GSI chyba",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
+      }
+    }
     void Scan(){try {HashSet<string> running=new HashSet<string>(Process.GetProcesses().Select(p=>{try{return p.ProcessName;}catch{return "";}}),StringComparer.OrdinalIgnoreCase);bool changed=false;DateTime now=DateTime.Now;
        for(int i=0;i<games.Length;i++){string g=games[i];bool found=processes[i].Any(exe=>running.Contains(exe));if(found&&!active.ContainsKey(g)){active[g]=now;changed=true;}else if(!found&&active.ContainsKey(g)){Finish(g,now);changed=true;if(g=="LoL")TrySyncLoL(true);}}
        if(changed){UpdateLiveStatus();ShowPage(page);}
@@ -1071,7 +1353,7 @@ namespace GioviGG {
     bool AutoStartEnabled(){using(RegistryKey k=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run",false)){return k!=null&&k.GetValue("GioviGG")!=null;}}
     void ToggleAutoStart(){try{using(RegistryKey k=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run",true)){if(AutoStartEnabled()) k.DeleteValue("GioviGG",false);else k.SetValue("GioviGG","\""+Application.ExecutablePath+"\"");}}catch(Exception ex){MessageBox.Show(ex.Message,"Autostart error");}}
     void RestoreApp(){Show();WindowState=FormWindowState.Normal;Activate();}
-    void ExitApp(){exiting=true;scanTimer.Stop();liveTimer.Stop();riotTimer.Stop();foreach(string g in active.Keys.ToList())Finish(g,DateTime.Now);tray.Visible=false;tray.Dispose();Close();Application.Exit();}
+    void ExitApp(){exiting=true;if(cs2Receiver!=null)cs2Receiver.Dispose();scanTimer.Stop();liveTimer.Stop();riotTimer.Stop();foreach(string g in active.Keys.ToList())Finish(g,DateTime.Now);tray.Visible=false;tray.Dispose();Close();Application.Exit();}
     [STAThread] static void Main(){Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);Application.Run(new App());}
   }
 }
