@@ -15,11 +15,18 @@ using Microsoft.Win32;
 using System.Reflection;
 using System.Net.Sockets;
 
-[assembly: AssemblyVersion("0.7.0.0")]
-[assembly: AssemblyFileVersion("0.7.0.0")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
 
 namespace GioviGG {
-  class Match { public string Game, Date, Result; public int Kills, Deaths, Assists; public string MatchId="", Champion="", Queue="", Source="Manual"; public int Duration; }
+  class Match {
+    public string Game, Date, Result;
+    public int Kills, Deaths, Assists;
+    public string MatchId="", Champion="", Queue="", Source="Manual", Role="";
+    public int Duration;
+    public int Headshots=-1, VisionScore=-1, Wards=-1, Damage=-1, Gold=-1, Cs=-1;
+    public bool HeadshotsPartial=false;
+  }
   class Session { public string Game, Start; public long Seconds; }
   class Storage {
     public List<Match> Matches = new List<Match>();
@@ -32,18 +39,26 @@ namespace GioviGG {
       Load();
     }
     int ToInt(string s) { int x; return int.TryParse(s, out x) ? x : 0; }
+    int MaybeInt(string s) { int v; return int.TryParse(s,out v)?v:-1; }
     long ToLong(string s) { long x; return long.TryParse(s, out x) ? x : 0; }
     string A(XElement e, string key) { XAttribute a = e.Attribute(key); return a == null ? "" : a.Value; }
     void Load() {
       if (!System.IO.File.Exists(FileName)) return;
       try {
         XDocument d = XDocument.Load(FileName);
-        foreach (XElement e in d.Descendants("match")) Matches.Add(new Match { Game=A(e,"game"),Date=A(e,"date"),Result=A(e,"result"),Kills=ToInt(A(e,"kills")),Deaths=ToInt(A(e,"deaths")),Assists=ToInt(A(e,"assists")),MatchId=A(e,"id"),Champion=A(e,"champion"),Queue=A(e,"queue"),Source=string.IsNullOrEmpty(A(e,"source"))?"Manual":A(e,"source"),Duration=ToInt(A(e,"duration")) });
+        foreach (XElement e in d.Descendants("match")) Matches.Add(new Match { Game=A(e,"game"),Date=A(e,"date"),Result=A(e,"result"),Kills=ToInt(A(e,"kills")),Deaths=ToInt(A(e,"deaths")),Assists=ToInt(A(e,"assists")),MatchId=A(e,"id"),Champion=A(e,"champion"),Queue=A(e,"queue"),Source=string.IsNullOrEmpty(A(e,"source"))?"Manual":A(e,"source"),Duration=ToInt(A(e,"duration")),Headshots=MaybeInt(A(e,"headshots")),
+          HeadshotsPartial=A(e,"hsPartial")=="1", VisionScore=MaybeInt(A(e,"vision")),Wards=MaybeInt(A(e,"wards")),
+          Damage=MaybeInt(A(e,"damage")),Gold=MaybeInt(A(e,"gold")),Cs=MaybeInt(A(e,"cs")),Role=A(e,"role") });
         foreach (XElement e in d.Descendants("session")) Sessions.Add(new Session { Game=A(e,"game"),Start=A(e,"start"),Seconds=ToLong(A(e,"seconds")) });
       } catch (Exception ex) { MessageBox.Show("Nepodařilo se načíst data: " + ex.Message, "GIOVI.GG"); }
     }
+    public void Reload() { Matches.Clear(); Sessions.Clear(); Load(); }
     public void Save() {
-      XDocument d = new XDocument(new XElement("giovi", new XElement("matches", Matches.Select(m => new XElement("match",new XAttribute("game",m.Game),new XAttribute("date",m.Date),new XAttribute("result",m.Result),new XAttribute("kills",m.Kills),new XAttribute("deaths",m.Deaths),new XAttribute("assists",m.Assists),new XAttribute("id",m.MatchId??""),new XAttribute("champion",m.Champion??""),new XAttribute("queue",m.Queue??""),new XAttribute("source",m.Source??"Manual"),new XAttribute("duration",m.Duration)))),new XElement("sessions",Sessions.Select(s => new XElement("session",new XAttribute("game",s.Game),new XAttribute("start",s.Start),new XAttribute("seconds",s.Seconds))))));
+      XDocument d = new XDocument(new XElement("giovi", new XElement("matches", Matches.Select(m => new XElement("match",new XAttribute("game",m.Game),new XAttribute("date",m.Date),new XAttribute("result",m.Result),new XAttribute("kills",m.Kills),new XAttribute("deaths",m.Deaths),new XAttribute("assists",m.Assists),new XAttribute("id",m.MatchId??""),new XAttribute("champion",m.Champion??""),new XAttribute("queue",m.Queue??""),new XAttribute("source",m.Source??"Manual"),new XAttribute("duration",m.Duration),
+          new XAttribute("headshots",m.Headshots),new XAttribute("hsPartial",m.HeadshotsPartial?"1":"0"),
+          new XAttribute("vision",m.VisionScore),new XAttribute("wards",m.Wards),
+          new XAttribute("damage",m.Damage),new XAttribute("gold",m.Gold),new XAttribute("cs",m.Cs),
+          new XAttribute("role",m.Role??"")))),new XElement("sessions",Sessions.Select(s => new XElement("session",new XAttribute("game",s.Game),new XAttribute("start",s.Start),new XAttribute("seconds",s.Seconds))))));
       string temp = FileName + ".tmp";
       d.Save(temp);
       if (System.IO.File.Exists(FileName)) System.IO.File.Replace(temp,FileName,null);
@@ -102,7 +117,7 @@ namespace GioviGG {
           using(WebClient wc=new WebClient()) {
             wc.Encoding=Encoding.UTF8;
             wc.Headers["X-Riot-Token"]=key;
-            wc.Headers[HttpRequestHeader.UserAgent]="GioviGG/0.7.0 (personal stats tracker)";
+            wc.Headers[HttpRequestHeader.UserAgent]="GioviGG/1.0.0 (personal stats tracker)";
             return wc.DownloadString(url);
           }
         } catch(WebException ex) {
@@ -174,7 +189,11 @@ namespace GioviGG {
           Result=Boolean(Field(you,"win"))?"Win":"Loss", Kills=(int)Num(Field(you,"kills")),
           Deaths=(int)Num(Field(you,"deaths")), Assists=(int)Num(Field(you,"assists")),
           Champion=Str(Field(you,"championName")), Queue=QueueName(Num(Field(info,"queueId"))),
-          Source="Riot API", Duration=(int)Math.Min(86400,Math.Max(0,duration)) };
+          Source="Riot API", Duration=(int)Math.Min(86400,Math.Max(0,duration)),
+          VisionScore=(int)Num(Field(you,"visionScore")),Wards=(int)Num(Field(you,"wardsPlaced")),
+          Damage=(int)Num(Field(you,"totalDamageDealtToChampions")),Gold=(int)Num(Field(you,"goldEarned")),
+          Cs=(int)(Num(Field(you,"totalMinionsKilled"))+Num(Field(you,"neutralMinionsKilled"))),
+          Role=Str(Field(you,"teamPosition")) };
         found.Add(m);
         known.Add(matchId);
       }
@@ -188,6 +207,8 @@ namespace GioviGG {
     public DateTime SeenUtc=DateTime.MinValue;
     public string Map="", Mode="", Phase="", Team="";
     public int Kills, Deaths, Assists, Ct, T;
+    public int Headshots=-1;
+    public bool HeadshotsPartial=false;
     public bool HasStats;
   }
   class Cs2GsiReceiver : IDisposable {
@@ -199,6 +220,8 @@ namespace GioviGG {
     Cs2State state=new Cs2State();
     string currentMap="", providerSteamId="", playerSteamId="";
     bool sawLive, recorded;
+    int trackedRound=-1, maxHsThisRound=0, totalHeadshots=0;
+    bool sawHeadshots=false, partialHeadshots=false;
     DateTime matchStarted=DateTime.MinValue;
     public Cs2GsiReceiver(string folder, Action<Cs2State,Match> callback){
       onUpdate=callback;
@@ -221,7 +244,7 @@ namespace GioviGG {
           "  \"auth\" { \"token\" \""+token+"\" }\r\n"+
           "  \"data\"\r\n  {\r\n"+
           "    \"provider\" \"1\"\r\n    \"map\" \"1\"\r\n    \"round\" \"1\"\r\n"+
-          "    \"player_id\" \"1\"\r\n    \"player_match_stats\" \"1\"\r\n  }\r\n}\r\n";
+          "    \"player_id\" \"1\"\r\n    \"player_state\" \"1\"\r\n    \"player_match_stats\" \"1\"\r\n  }\r\n}\r\n";
       }
     }
     public void InstallConfig(string cfgFolder){
@@ -292,48 +315,62 @@ namespace GioviGG {
     void ProcessPayload(Dictionary<string,object> data){
       Dictionary<string,object> map=Dict(Val(data,"map")), player=Dict(Val(data,"player"));
       Dictionary<string,object> provider=Dict(Val(data,"provider"));
+      int roundNo=-1;
       if(map!=null){
         if(Has(map,"name"))state.Map=Str(Val(map,"name"));
         if(Has(map,"mode"))state.Mode=Str(Val(map,"mode"));
         if(Has(map,"phase"))state.Phase=Str(Val(map,"phase"));
+        if(Has(map,"round"))roundNo=Number(Val(map,"round"));
         var ct=Dict(Val(map,"team_ct"));var t=Dict(Val(map,"team_t"));
         if(Has(ct,"score"))state.Ct=Number(Val(ct,"score"));
         if(Has(t,"score"))state.T=Number(Val(t,"score"));
       }
       if(Has(provider,"steamid"))providerSteamId=Str(Val(provider,"steamid"));
+      bool newMatch=state.Phase.Equals("live",StringComparison.OrdinalIgnoreCase) && state.Map.Length>0 &&
+        (!sawLive || recorded || !state.Map.Equals(currentMap,StringComparison.OrdinalIgnoreCase));
+      if(newMatch){
+        currentMap=state.Map;matchStarted=DateTime.UtcNow;sawLive=true;recorded=false;
+        state.HasStats=false;state.Kills=0;state.Deaths=0;state.Assists=0;
+        trackedRound=-1;maxHsThisRound=0;totalHeadshots=0;sawHeadshots=false;partialHeadshots=false;
+        state.Headshots=-1;state.HeadshotsPartial=false;
+        if(roundNo>0)partialHeadshots=true; // GSI was attached after the match began.
+      }
       if(player!=null){
         if(Has(player,"steamid"))playerSteamId=Str(Val(player,"steamid"));
-        bool own=Has(player,"steamid") && providerSteamId.Length>0 && playerSteamId==providerSteamId;
+        bool own=providerSteamId.Length>0 && playerSteamId==providerSteamId;
         if(own){
           if(Has(player,"team"))state.Team=Str(Val(player,"team"));
           var stats=Dict(Val(player,"match_stats"));
           if(stats!=null && Has(stats,"kills") && Has(stats,"deaths") && Has(stats,"assists")){
-            state.Kills=Number(Val(stats,"kills"));
-            state.Deaths=Number(Val(stats,"deaths"));
-            state.Assists=Number(Val(stats,"assists"));
-            state.HasStats=true;
+            state.Kills=Number(Val(stats,"kills"));state.Deaths=Number(Val(stats,"deaths"));
+            state.Assists=Number(Val(stats,"assists"));state.HasStats=true;
+          }
+          var playerState=Dict(Val(player,"state"));
+          if(sawLive && !recorded && playerState!=null && Has(playerState,"round_killhs") && roundNo>=0){
+            int currentHs=Number(Val(playerState,"round_killhs"));
+            if(trackedRound!=roundNo){
+              if(trackedRound>=0 && roundNo>trackedRound+1)partialHeadshots=true;
+              trackedRound=roundNo;maxHsThisRound=currentHs;totalHeadshots+=currentHs;
+            }else if(currentHs>maxHsThisRound){
+              totalHeadshots+=currentHs-maxHsThisRound;maxHsThisRound=currentHs;
+            }else if(currentHs<maxHsThisRound){
+              // State correction/reset: do not subtract previously recorded headshots.
+              maxHsThisRound=currentHs;partialHeadshots=true;
+            }
+            sawHeadshots=true;
           }
         }
       }
-      state.SeenUtc=DateTime.UtcNow;
-      if(state.Phase.Equals("live",StringComparison.OrdinalIgnoreCase) && state.Map.Length>0 &&
-         (!sawLive || recorded || !state.Map.Equals(currentMap,StringComparison.OrdinalIgnoreCase))){
-        currentMap=state.Map;matchStarted=DateTime.UtcNow;sawLive=true;recorded=false;state.HasStats=false;
-        state.Kills=0;state.Deaths=0;state.Assists=0;
-        // If the first live payload includes our own stats, keep them for this session.
-        bool own=Has(player,"steamid") && providerSteamId.Length>0 && playerSteamId==providerSteamId;
-        var stats=own?Dict(Val(player,"match_stats")):null;
-        if(stats!=null && Has(stats,"kills") && Has(stats,"deaths") && Has(stats,"assists")){
-          state.Kills=Number(Val(stats,"kills"));state.Deaths=Number(Val(stats,"deaths"));
-          state.Assists=Number(Val(stats,"assists"));state.HasStats=true;
-        }
+      if(sawHeadshots){
+        state.Headshots=totalHeadshots;
+        state.HeadshotsPartial=partialHeadshots || (state.HasStats && totalHeadshots>state.Kills);
       }
+      state.SeenUtc=DateTime.UtcNow;
       Match completed=null;
       if(sawLive && !recorded && state.Phase.Equals("gameover",StringComparison.OrdinalIgnoreCase)){
-        recorded=true; // one record per observed match, never on every heartbeat
+        recorded=true;
         bool ct=state.Team.Equals("CT",StringComparison.OrdinalIgnoreCase);
         bool t=state.Team.Equals("T",StringComparison.OrdinalIgnoreCase);
-        // Deathmatch and modes without team scores do not have a reliable W/L result.
         bool teamGame=!state.Mode.Equals("deathmatch",StringComparison.OrdinalIgnoreCase);
         if(state.HasStats && (ct||t) && state.Map.Length>0 && teamGame && (state.Ct>0 || state.T>0)){
           int ours=ct?state.Ct:state.T, theirs=ct?state.T:state.Ct;
@@ -341,12 +378,15 @@ namespace GioviGG {
           completed=new Match {Game="CS2",Date=DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),Result=result,
             Kills=state.Kills,Deaths=state.Deaths,Assists=state.Assists,Queue=state.Map+" · "+state.Mode,
             Source="CS2 GSI",MatchId="CS2-GSI-"+Guid.NewGuid().ToString("N"),
+            Headshots=sawHeadshots?Math.Min(totalHeadshots,state.Kills):-1,
+            HeadshotsPartial=state.HeadshotsPartial,
             Duration=matchStarted==DateTime.MinValue?0:(int)Math.Max(0,Math.Min(21600,(DateTime.UtcNow-matchStarted).TotalSeconds))};
         }
       }
       if(onUpdate!=null){
         Cs2State report=new Cs2State {SeenUtc=state.SeenUtc,Map=state.Map,Mode=state.Mode,Phase=state.Phase,
-          Team=state.Team,Kills=state.Kills,Deaths=state.Deaths,Assists=state.Assists,Ct=state.Ct,T=state.T,HasStats=state.HasStats};
+          Team=state.Team,Kills=state.Kills,Deaths=state.Deaths,Assists=state.Assists,Ct=state.Ct,T=state.T,
+          Headshots=state.Headshots,HeadshotsPartial=state.HeadshotsPartial,HasStats=state.HasStats};
         onUpdate(report,completed);
       }
     }
@@ -423,12 +463,12 @@ namespace GioviGG {
   }
 
   class App : Form {
-    const string CurrentVersion = "0.7.0";
+    const string CurrentVersion = "1.0.0";
     const string ReleaseApi = "https://api.github.com/repos/KingGiovi/GIOVI-GG/releases/latest";
     UpdateInfo availableUpdate;
     bool updateBusy = false;
     string updateMessage = "Zatím nezkontrolováno.";
-    Color bg = Color.FromArgb(12,13,23), side = Color.FromArgb(17,19,32), card = Color.FromArgb(29,31,49), fg=Color.FromArgb(243,240,255), muted=Color.FromArgb(157,158,181), accent=Color.FromArgb(166,123,255), green=Color.FromArgb(104,220,167);
+    Color bg = Color.FromArgb(11,13,24), side = Color.FromArgb(17,19,32), card = Color.FromArgb(28,31,50), fg=Color.FromArgb(243,240,255), muted=Color.FromArgb(157,158,181), accent=Color.FromArgb(166,123,255), green=Color.FromArgb(104,220,167);
     Color shade = Color.FromArgb(37,40,60), line = Color.FromArgb(59,62,83), danger=Color.FromArgb(255,139,158);
     string[] games = { "CS2", "LoL", "R6" };
     string[] names = { "Counter-Strike 2", "League of Legends", "Rainbow Six Siege" };
@@ -440,12 +480,16 @@ namespace GioviGG {
     Cs2GsiReceiver cs2Receiver;
     Cs2State cs2State=new Cs2State();
     string cs2Status="CS2 GSI: čekám na první data.";
-    Label cs2LiveLabel;
+    // Small CS2 preview and the full LIVE MATCH view share one low-cost UI refresh.
+    readonly Dictionary<string,Label> cs2Ui=new Dictionary<string,Label>();
+    Panel cs2CtBar, cs2TBar;
+    readonly Color ctBlue=Color.FromArgb(104,188,255);
+    readonly Color tGold=Color.FromArgb(255,194,111);
     bool riotSyncBusy=false;
     string riotStatus="Nepřipojeno. Přidej svůj Riot API klíč.";
     DateTime lastRiotAttempt=DateTime.MinValue;
     Timer riotTimer;
-    Panel sidebar, mainArea, content, header;
+    Panel sidebar, mainArea, content, header, navHost;
     Dictionary<string,Button> navButtons = new Dictionary<string,Button>();
     string gameTab="Overview", settingsTab="Updates", historyFilter="All";
     Label status, heading;
@@ -455,12 +499,15 @@ namespace GioviGG {
     string analyticsGame = "LoL";
     string analyticsPeriod = "30D";
     string historyResult = "All", historyPeriod = "All", historySearch = "";
+    string recordsGame="CS2";
     Panel historyListPanel;
     Label historyCount;
+    DateTime calendarMonth=new DateTime(DateTime.Now.Year,DateTime.Now.Month,1);
+    DateTime selectedDay=DateTime.Today;
     bool exiting = false;
     public App() {
       riot=new RiotConfig(store.Folder);
-      Text = "GIOVI.GG — Ultimate Gaming Hub v0.7.0"; Width = 1160; Height = 780; MinimumSize = new Size(1020,640); StartPosition = FormStartPosition.CenterScreen; BackColor = bg; ForeColor = fg; Font = new Font("Segoe UI", 10f);
+      Text = "GIOVI.GG — ULTIMATE EDITION v1.0.0"; Width = 1240; Height = 820; MinimumSize = new Size(1020,640); StartPosition = FormStartPosition.CenterScreen; BackColor = bg; ForeColor = fg; Font = new Font("Segoe UI", 10f);
       // Fixed two-column layout: sidebar occupies its own column, never overlays content.
       TableLayoutPanel shell = new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=2, RowCount=1, Margin=new Padding(0), Padding=new Padding(0), BackColor=bg };
       shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,210));
@@ -468,17 +515,32 @@ namespace GioviGG {
       shell.RowStyles.Add(new RowStyle(SizeType.Percent,100));
       Controls.Add(shell);
       sidebar = new Panel { Dock=DockStyle.Fill, BackColor=side, Margin=new Padding(0) }; shell.Controls.Add(sidebar,0,0);
-      Label brand=Lbl("◆ GIOVI.GG",22,accent,true); brand.Location=new Point(18,25); brand.Size=new Size(190,42);sidebar.Controls.Add(brand);
-      Label sub=Lbl("ULTIMATE GAMING HUB",9,muted,true);sub.Location=new Point(20,70);sub.Size=new Size(185,24);sidebar.Controls.Add(sub);
-      AddNav("⌂   Přehled","Overview",124);
-      AddNav("▣   Counter-Strike 2","CS2",177);
-      AddNav("◇   League of Legends","LoL",230);
-      AddNav("⬡   Rainbow Six Siege","R6",283);
-      AddNav("▤   Historie zápasů","History",336);
-      AddNav("◈   Analýza výkonu","Analytics",389);
-      AddNav("★   Achievementy","Achievements",442);
-      AddNav("⚙   Nastavení","Settings",495);
-      Label privacy=Lbl("● DATA STORED LOCALLY",9,green,true);privacy.Dock=DockStyle.Bottom;privacy.Height=46;privacy.TextAlign=ContentAlignment.MiddleCenter;sidebar.Controls.Add(privacy);
+      TableLayoutPanel sideLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=new Padding(0),Padding=new Padding(0)};
+      sideLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+      sideLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,106));
+      sideLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+      sideLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,39));
+      sidebar.Controls.Add(sideLayout);
+      Panel branding=new Panel {Dock=DockStyle.Fill,BackColor=side};sideLayout.Controls.Add(branding,0,0);
+      Label brand=Lbl("◆ GIOVI.GG",22,accent,true);brand.Location=new Point(17,22);brand.Size=new Size(190,42);branding.Controls.Add(brand);
+      Label sub=Lbl("ULTIMATE EDITION  1.0",8,muted,true);sub.Location=new Point(19,67);sub.Size=new Size(185,24);branding.Controls.Add(sub);
+      navHost=new Panel{Dock=DockStyle.Fill,AutoScroll=true,BackColor=side};sideLayout.Controls.Add(navHost,0,1);
+      AddNav("⌂   Dashboard","Overview",6);
+      AddNav("▣   Counter-Strike 2","CS2",56);
+      AddNav("◇   League of Legends","LoL",106);
+      AddNav("⬡   Rainbow Six Siege","R6",156);
+      AddNav("▤   Historie zápasů","History",206);
+      AddNav("◈   Analýza výkonu","Analytics",256);
+      AddNav("★   Achievementy","Achievements",306);
+      AddNav("▦   Herní kalendář","Calendar",356);
+      AddNav("◉   Herní session","Sessions",406);
+      AddNav("✦   Smart Insights","Insights",456);
+      AddNav("♛   Osobní rekordy","Records",506);
+      AddNav("⚙   Nastavení","Settings",556);
+      navHost.AutoScrollMinSize=new Size(0,616);
+      Panel privacy=new Panel{Dock=DockStyle.Fill,BackColor=side};sideLayout.Controls.Add(privacy,0,2);
+      Label local=Lbl("● DATA POUZE V PC",8,green,true);local.Dock=DockStyle.Fill;
+      local.TextAlign=ContentAlignment.MiddleCenter;privacy.Controls.Add(local);
       mainArea=new Panel { Dock=DockStyle.Fill,BackColor=bg, Margin=new Padding(0) };shell.Controls.Add(mainArea,1,0);
       header=new Panel { Dock=DockStyle.Top,Height=82,BackColor=bg };mainArea.Controls.Add(header);
       heading=Lbl("Overview",24,fg,true);heading.Location=new Point(26,18);heading.Size=new Size(560,44);header.Controls.Add(heading);
@@ -493,7 +555,7 @@ namespace GioviGG {
       riotTimer=new Timer { Interval=600000 }; // Check every 10 minutes while the key is active.
       riotTimer.Tick+=(s,e)=>TrySyncLoL(true);
       riotTimer.Start();
-      liveTimer=new Timer { Interval=1000 };liveTimer.Tick+=(s,e)=>{ if (page=="Overview" || Array.IndexOf(games,page)>=0) { UpdateLiveStatus(); } };liveTimer.Start();
+      liveTimer=new Timer { Interval=1000 };liveTimer.Tick+=(s,e)=>{ if (page=="Overview" || Array.IndexOf(games,page)>=0) { UpdateLiveStatus(); } if(page=="CS2")UpdateCs2Widgets(); };liveTimer.Start();
       content.Resize+=(s,e)=>{ if (WindowState==FormWindowState.Normal && content!=null && content.Width>400 && content.Height>300) ShowPage(page); };
       Resize+=(s,e)=>{ if (WindowState==FormWindowState.Minimized) { Hide();tray.BalloonTipTitle="GIOVI.GG";tray.BalloonTipText="Sledování her běží dál na pozadí.";tray.ShowBalloonTip(1500); } };
       FormClosing+=(s,e)=>{if(!exiting){e.Cancel=true;WindowState=FormWindowState.Minimized;Hide();}};
@@ -511,7 +573,7 @@ namespace GioviGG {
     }
     Label Lbl(string t,float size,Color c,bool bold=false){ return new Label {Text=t,Font=new Font("Segoe UI",size,bold?FontStyle.Bold:FontStyle.Regular),ForeColor=c,BackColor=Color.Transparent,AutoEllipsis=true}; }
     Button Btn(string t,Color color){return new Button {Text=t,BackColor=color,ForeColor=Color.White,FlatStyle=FlatStyle.Flat,Font=new Font("Segoe UI",10,FontStyle.Bold),Cursor=Cursors.Hand,UseVisualStyleBackColor=false};}
-    void AddNav(string label,string key,int y){Button b=Btn(label,side);b.FlatAppearance.BorderSize=0;b.Font=new Font("Segoe UI",9.6f,FontStyle.Bold);b.TextAlign=ContentAlignment.MiddleLeft;b.Location=new Point(9,y);b.Size=new Size(192,44);b.Click+=(s,e)=>ShowPage(key);b.MouseEnter+=(s,e)=>{if(page!=key)b.BackColor=shade;};b.MouseLeave+=(s,e)=>{if(page!=key)b.BackColor=side;};sidebar.Controls.Add(b);navButtons[key]=b;}
+    void AddNav(string label,string key,int y){Button b=Btn(label,side);b.FlatAppearance.BorderSize=0;b.Font=new Font("Segoe UI",9.6f,FontStyle.Bold);b.TextAlign=ContentAlignment.MiddleLeft;b.Location=new Point(9,y);b.Size=new Size(192,44);b.Click+=(s,e)=>ShowPage(key);b.MouseEnter+=(s,e)=>{if(page!=key)b.BackColor=shade;};b.MouseLeave+=(s,e)=>{if(page!=key)b.BackColor=side;};navHost.Controls.Add(b);navButtons[key]=b;}
     Panel Card(int x,int y,int w,int h){Panel p=new Panel {Location=new Point(x,y),Size=new Size(w,h),BackColor=card};content.Controls.Add(p);return p;}
     void AddText(Control p,string text,int x,int y,int w,int h,float size,Color color,bool bold=false){Label l=Lbl(text,size,color,bold);l.Location=new Point(x,y);l.Size=new Size(w,h);p.Controls.Add(l);}
     Button Action(Control p,string text,int x,int y,int w,int h,Action act){Button b=Btn(text,accent);b.FlatAppearance.BorderSize=0;b.Location=new Point(x,y);b.Size=new Size(w,h);b.Click+=(s,e)=>act();p.Controls.Add(b);return b;}
@@ -572,7 +634,11 @@ namespace GioviGG {
       content.SuspendLayout();
       foreach(Control c in content.Controls.Cast<Control>().ToArray()){content.Controls.Remove(c);c.Dispose();}
       content.AutoScroll=false;
-      heading.Text=Array.IndexOf(games,p)>=0?names[Array.IndexOf(games,p)]:p=="History"?"Historie zápasů":p=="Settings"?"Nastavení":p=="Analytics"?"Analýza výkonu":p=="Achievements"?"Achievementy":"Přehled";
+      content.AutoScrollPosition=new Point(0,0);
+      content.AutoScrollMinSize=Size.Empty;
+      cs2Ui.Clear();
+      cs2CtBar=null;cs2TBar=null;
+      heading.Text=Array.IndexOf(games,p)>=0?names[Array.IndexOf(games,p)]:p=="History"?"Historie zápasů":p=="Settings"?"Nastavení":p=="Analytics"?"Analýza výkonu":p=="Achievements"?"Achievementy":p=="Calendar"?"Herní kalendář":p=="Sessions"?"Herní session":p=="Insights"?"Smart Insights":p=="Records"?"Osobní rekordy":"Přehled";
       heading.Font=new Font("Segoe UI",22f,FontStyle.Bold);
       SetNavActive();UpdateLiveStatus();
       if(p=="Overview")BuildOverview();
@@ -580,6 +646,10 @@ namespace GioviGG {
       else if(p=="History")BuildHistory();
       else if(p=="Analytics")BuildAnalytics();
       else if(p=="Achievements")BuildAchievements();
+      else if(p=="Calendar")BuildCalendar();
+      else if(p=="Sessions")BuildSessions();
+      else if(p=="Insights")BuildInsights();
+      else if(p=="Records")BuildRecords();
       else if(p=="Settings")BuildSettings();
       content.ResumeLayout(true);
     }
@@ -631,6 +701,22 @@ namespace GioviGG {
     string Avg(List<Match> matches,Func<Match,int> property){
       return matches.Count==0?"—":matches.Average(m=>property(m)).ToString("0.0");
     }
+    static string Optional(int n){return n<0?"—":n.ToString("N0");}
+    static string OptionalCsv(int n){return n<0?"":n.ToString(System.Globalization.CultureInfo.InvariantCulture);}
+    static string FormatHs(Match match){
+      return match.Headshots<0 || match.Kills<=0?"—":
+        (Math.Min(match.Kills,match.Headshots)*100.0/match.Kills).ToString("0.0")+"%";
+    }
+    List<Match> KnownHs(List<Match> matches){
+      return matches.Where(m=>m.Game=="CS2" && m.Headshots>=0 && !m.HeadshotsPartial && m.Kills>0).ToList();
+    }
+    string AllHs(List<Match> matches){
+      List<Match> known=KnownHs(matches);long kills=known.Sum(m=>(long)m.Kills);
+      if(kills==0)return "—";
+      return (100.0*known.Sum(m=>(long)m.Headshots)/kills).ToString("0.0")+"%";
+    }
+    int TotalHeadshots(List<Match> matches){return matches.Where(m=>m.Game=="CS2"&&m.Headshots>=0&&!m.HeadshotsPartial).Sum(m=>Math.Max(0,m.Headshots));}
+
     void PeriodButtons(int x,int y){
       string[] keys={"7D","30D","ALL"};
       string[] labels={"7 DNÍ","30 DNÍ","CELKEM"};
@@ -657,7 +743,9 @@ namespace GioviGG {
       Metric(content,"Výhry v řadě",streak.ToString(),x+3*(tileW+gap),111,tileW,92,Color.FromArgb(241,195,120));
       Metric(content,"Průměr killů",Avg(results,m=>m.Kills),x,214,tileW,72,fg);
       Metric(content,"Průměr smrtí",Avg(results,m=>m.Deaths),x+tileW+gap,214,tileW,72,fg);
-      Metric(content,"Průměr asistencí",Avg(results,m=>m.Assists),x+2*(tileW+gap),214,tileW,72,fg);
+      Metric(content,analyticsGame=="CS2"?"HS% (ověřené)":"Průměr asistencí",
+        analyticsGame=="CS2"?AllHs(results):Avg(results,m=>m.Assists),x+2*(tileW+gap),214,tileW,72,
+        analyticsGame=="CS2"?tGold:fg);
       long seconds=PeriodSeconds(analyticsGame,analyticsPeriod);
       Metric(content,"Herní čas",(seconds/3600)+"h "+((seconds%3600)/60)+"m",x+3*(tileW+gap),214,tileW,72,fg);
       int y=301,graphWidth=(int)(w*0.61),rightWidth=w-graphWidth-gap;
@@ -691,7 +779,10 @@ namespace GioviGG {
       }else{
         Copy(highlights,"ÚSPĚŠNOST",14,146,rightWidth-28,22,9,muted,true);
         Copy(highlights,played==0?"—":wins+" : "+losses,14,172,rightWidth-28,33,18,fg,true);
-        Copy(highlights,"Výsledky CS2/R6 zatím zadáváme ručně.",14,213,rightWidth-28,48,9,muted,false).AutoEllipsis=false;
+        Copy(highlights,analyticsGame=="CS2"?
+          "HS% je počítané pouze z kompletně sledovaných GSI zápasů. Ostatní zůstávají neznámé.":
+          "U R6 sledujeme čas; výsledky lze zatím zadávat ručně.",
+          14,213,rightWidth-28,62,9,muted,false).AutoEllipsis=false;
       }
       // Results chart is based strictly on recorded matches; no fabricated live stats.
     }
@@ -701,7 +792,7 @@ namespace GioviGG {
       long wins=all.Count(m=>m.Result=="Win"),kills=all.Sum(m=>(long)m.Kills);
       int best=games.Max(g=>BestWinningStreak(Of(g)));
       long played=all.Count,gameCount=games.Count(g=>Of(g).Count>0);
-      return new List<Achievement>{
+      List<Achievement> badges=new List<Achievement>{
         new Achievement("První zápas","Zaznamenej svůj první herní zápas.",played,1),
         new Achievement("První vítězství","Zaznamenej svou první výhru.",wins,1),
         new Achievement("Deset výher","Dosáhni 10 vítězství napříč hrami.",wins,10),
@@ -713,8 +804,48 @@ namespace GioviGG {
         new Achievement("Multi-gamer","Zaznamenej zápas ve všech třech hrách.",gameCount,3),
         new Achievement("Centurion","Zaznamenej dohromady 100 zápasů.",played,100),
         new Achievement("Perfect match","Vyhraj zápas s 0 smrtmi.",all.Count(m=>m.Result=="Win"&&m.Deaths==0),1),
-        new Achievement("Night owl","Nasbírej 10 hodin sledovaného hraní.",Seconds(null)/3600,10)
+        new Achievement("Night owl","Nasbírej 10 hodin sledovaného hraní.",Seconds(null)/3600,10),
+        new Achievement("Trpělivost","Zaznamenej 250 zápasů.",played,250),
+        new Achievement("Iron Will","Zaznamenej 500 zápasů.",played,500),
+        new Achievement("Nesmrtelný","Zaznamenej 1 000 zápasů.",played,1000),
+        new Achievement("Lovec II","Nasbírej 5 000 killů.",kills,5000),
+        new Achievement("Lovec III","Nasbírej 10 000 killů.",kills,10000),
+        new Achievement("Šampión","Vyhraj 250 zápasů.",wins,250),
+        new Achievement("Legenda","Vyhraj 500 zápasů.",wins,500),
+        new Achievement("Bez porážky","Vyhraj 5 zápasů v řadě v jedné hře.",best,5),
+        new Achievement("Perfektní série","Vyhraj 10 zápasů v řadě v jedné hře.",best,10),
+        new Achievement("LoL tovaryš","Odehraj 50 LoL zápasů.",Of("LoL").Count,50),
+        new Achievement("LoL veterán II","Odehraj 100 LoL zápasů.",Of("LoL").Count,100),
+        new Achievement("LoL legenda","Odehraj 500 LoL zápasů.",Of("LoL").Count,500),
+        new Achievement("Support master","Získej 100 asistencí v LoL.",Of("LoL").Sum(m=>(long)m.Assists),100),
+        new Achievement("Assist king","Získej 1 000 asistencí v LoL.",Of("LoL").Sum(m=>(long)m.Assists),1000),
+        new Achievement("Vision game","Zaznamenej LoL zápas s vision score alespoň 50.",Of("LoL").Count(m=>m.VisionScore>=50),1),
+        new Achievement("Thresh main","Odehraj 20 zápasů za Threshe.",Of("LoL").Count(m=>string.Equals(m.Champion,"Thresh",StringComparison.OrdinalIgnoreCase)),20),
+        new Achievement("Hook legend","Odehraj 100 zápasů za Threshe.",Of("LoL").Count(m=>string.Equals(m.Champion,"Thresh",StringComparison.OrdinalIgnoreCase)),100),
+        new Achievement("CS2 začátečník","Zaznamenej 10 CS2 zápasů.",Of("CS2").Count,10),
+        new Achievement("CS2 veterán","Zaznamenej 100 CS2 zápasů.",Of("CS2").Count,100),
+        new Achievement("CS2 profesionál","Zaznamenej 500 CS2 zápasů.",Of("CS2").Count,500),
+        new Achievement("První headshot","Zaznamenej první CS2 headshot přes GSI.",TotalHeadshots(Of("CS2")),1),
+        new Achievement("Sharp shooter","Zaznamenej 100 CS2 headshotů přes GSI.",TotalHeadshots(Of("CS2")),100),
+        new Achievement("One tap","Dosáhni HS% alespoň 60 % s 10+ killy (kompletní záznam).",
+          KnownHs(Of("CS2")).Count(m=>m.Kills>=10 && 100.0*m.Headshots/m.Kills>=60),1),
+        new Achievement("Sniper","Zaznamenej 500 CS2 headshotů přes GSI.",TotalHeadshots(Of("CS2")),500),
+        new Achievement("R6 začátečník","Zaznamenej 10 R6 zápasů.",Of("R6").Count,10),
+        new Achievement("R6 veterán","Zaznamenej 100 R6 zápasů.",Of("R6").Count,100),
+        new Achievement("Noc je mladá","Sleduj 50 hodin herního času.",Seconds(null)/3600,50),
+        new Achievement("Gamer života","Sleduj 100 hodin herního času.",Seconds(null)/3600,100),
+        new Achievement("Maratonec","Sleduj 500 hodin herního času.",Seconds(null)/3600,500),
+        new Achievement("Calendar king","Hraj alespoň v 7 různých dnech.",store.Sessions.Select(z=>ParseDate(z.Start)).Where(z=>z.HasValue).Select(z=>z.Value.Date).Distinct().Count(),7)
       };
+      int[] playedGoals={5,25,75,200};int[] winGoals={3,15,50,150};int[] killGoals={50,500,2500};
+      foreach(string game in games){
+        List<Match> subset=Of(game);
+        long gameWins=subset.Count(m=>m.Result=="Win"),gameKills=subset.Sum(m=>(long)m.Kills);
+        foreach(int goal in playedGoals)badges.Add(new Achievement(game+" • "+goal+" her","Odehraj "+goal+" zápasů v "+game+".",subset.Count,goal));
+        foreach(int goal in winGoals)badges.Add(new Achievement(game+" • "+goal+" výher","Vyhraj "+goal+" zápasů v "+game+".",gameWins,goal));
+        foreach(int goal in killGoals)badges.Add(new Achievement(game+" • "+goal+" killů","Zaznamenej "+goal+" killů v "+game+".",gameKills,goal));
+      }
+      return badges;
     }
     void BuildAchievements(){
       int w=ViewWidth,h=ViewHeight,x=24,gap=12;
@@ -767,7 +898,10 @@ namespace GioviGG {
       Metric(content,"Vítězství",wins.ToString(),x+metricW+gap,132,metricW,90,green);
       Metric(content,"Win rate",all.Count==0?"—":(wins*100.0/all.Count).ToString("0.0")+"%",x+(metricW+gap)*2,132,metricW,90,fg);
       Metric(content,"Herní čas",Playtime(null),x+(metricW+gap)*3,132,metricW,90,fg);
-      Copy(content,"MOJE HRY",x,239,w,24,11,fg,true);
+      Copy(content,"MOJE HRY",x,239,w-320,24,11,fg,true);
+      ButtonAt(content,"KALENDÁŘ",x+w-315,231,100,34,()=>ShowPage("Calendar"),false);
+      ButtonAt(content,"SESSION",x+w-207,231,95,34,()=>ShowPage("Sessions"),false);
+      ButtonAt(content,"INSIGHTS",x+w-104,231,104,34,()=>ShowPage("Insights"),false);
       int gW=(w-2*gap)/3;
       for(int i=0;i<3;i++){
         string game=games[i];int idx=i;
@@ -799,11 +933,15 @@ namespace GioviGG {
       }
     }
     void BuildGamePage(string game){
-      string[] labels=game=="LoL"?new string[]{"PŘEHLED","ZÁPASY","ŠAMPIONI"}:new string[]{"PŘEHLED","ZÁPASY"};
-      string[] keys=game=="LoL"?new string[]{"Overview","Matches","Champions"}:new string[]{"Overview","Matches"};
+      string[] labels=game=="LoL"?new string[]{"PŘEHLED","ZÁPASY","ŠAMPIONI","DEEP STATS"}:
+        game=="CS2"?new string[]{"PŘEHLED","● LIVE MATCH","ZÁPASY"}:new string[]{"PŘEHLED","ZÁPASY"};
+      string[] keys=game=="LoL"?new string[]{"Overview","Matches","Champions","Deep"}:
+        game=="CS2"?new string[]{"Overview","Live","Matches"}:new string[]{"Overview","Matches"};
       Tabs(labels,keys,gameTab,12,selected=>{gameTab=selected;ShowPage(game);});
+      if(game=="CS2" && gameTab=="Live") {BuildCs2Live();return;}
       if(gameTab=="Matches") {BuildGameMatches(game);return;}
       if(gameTab=="Champions"&&game=="LoL") {BuildChampions();return;}
+      if(gameTab=="Deep"&&game=="LoL") {BuildLoLDeepStats();return;}
       BuildGameOverview(game);
     }
     void BuildGameOverview(string game){
@@ -818,10 +956,12 @@ namespace GioviGG {
       Metric(content,"Win rate",mm.Count==0?"—":(win*100.0/mm.Count).ToString("0.0")+"%",x+big+gap,99,big,87,green);
       string ratio=mm.Count==0?"—":game=="LoL"?((kills+assists)/(double)Math.Max(1,deaths)).ToString("0.00"):deaths==0?"—":(kills/(double)deaths).ToString("0.00");
       Metric(content,game=="LoL"?"KDA":"K/D",ratio,x+(big+gap)*2,99,big,87,fg);
-      int small=(w-4*gap)/5;
-      string[] labels={"Výhry","Prohry","Killy","Smrti","Asistence"};
-      int[] values={win,loss,kills,deaths,assists};
-      for(int i=0;i<5;i++)Metric(content,labels[i],values[i].ToString(),x+i*(small+gap),198,small,65,i==0?green:i==1?danger:fg);
+      int columns=game=="CS2"?6:5,small=(w-(columns-1)*gap)/columns;
+      string[] labels=game=="CS2"?new string[]{"Výhry","Prohry","Killy","Smrti","Asistence","HS%"}:
+        new string[]{"Výhry","Prohry","Killy","Smrti","Asistence"};
+      string[] values=game=="CS2"?new string[]{win.ToString(),loss.ToString(),kills.ToString(),deaths.ToString(),assists.ToString(),AllHs(mm)}:
+        new string[]{win.ToString(),loss.ToString(),kills.ToString(),deaths.ToString(),assists.ToString()};
+      for(int i=0;i<columns;i++)Metric(content,labels[i],values[i],x+i*(small+gap),198,small,65,i==0?green:i==1?danger:i==5?tGold:fg);
       int y=277, boxH=Math.Max(218,h-y+11);
       int leftWidth=Math.Max(310,(int)(w*0.59));int rightX=x+leftWidth+gap;int rightWidth=w-leftWidth-gap;
       Panel history=Surface(content,x,y,leftWidth,boxH,card);
@@ -842,12 +982,7 @@ namespace GioviGG {
         Button sync=ButtonAt(connection,riotSyncBusy?"SYNCHRONIZUJI...":"SYNCHRONIZOVAT",12,boxH-43,rightWidth-24,33,()=>TrySyncLoL(false),true);
         sync.Enabled=!riotSyncBusy;
       }else if(game=="CS2"){
-        Copy(connection,"CS2  •  LIVE GAME STATE",14,13,rightWidth-28,25,10,accent,true);
-        Rule(connection,13,43,rightWidth-26,line);
-        cs2LiveLabel=Copy(connection,Cs2LiveText(),14,55,rightWidth-28,Math.Max(70,boxH-145),10,fg,false);
-        cs2LiveLabel.AutoEllipsis=false;
-        Copy(connection,"Automatický zápis výsledků vyžaduje GSI a konec zápasu.",14,Math.Max(119,boxH-85),rightWidth-26,31,8,muted,false);
-        ButtonAt(connection,"NASTAVIT CS2 GSI",12,boxH-44,rightWidth-24,34,()=>ConfigureCs2Gsi(),true);
+        BuildCs2Mini(connection,rightWidth,boxH);
       }else{
         Copy(connection,"SLEDOVÁNÍ HRY",14,14,rightWidth-28,25,10,accent,true);
         Rule(connection,13,47,rightWidth-26,line);
@@ -864,6 +999,50 @@ namespace GioviGG {
       Panel rows=Surface(content,x,115,w,Math.Max(230,h-117),card);
       MatchList(rows,mm,12,12,w-24,rows.Height-22,mm.Count);
     }
+    void BuildLoLDeepStats(){
+      int x=24,w=ViewWidth,h=ViewHeight,gap=12;
+      if(h<670){content.AutoScroll=true;content.AutoScrollMinSize=new Size(0,700);}
+      List<Match> mm=Of("LoL");
+      var vision=mm.Where(m=>m.VisionScore>=0).ToList();
+      var gold=mm.Where(m=>m.Gold>=0).ToList();
+      var damage=mm.Where(m=>m.Damage>=0).ToList();
+      var cs=mm.Where(m=>m.Cs>=0).ToList();
+      Copy(content,"RIOT API  •  DEEP STATS",x,65,w-20,29,13,accent,true);
+      Copy(content,"Pokročilé hodnoty se ukládají z nově importovaných zápasů; starší záznamy mohou mít —.",x,96,w-20,24,9,muted,false);
+      int small=(w-3*gap)/4;
+      Metric(content,"Průměr Vision",vision.Count==0?"—":vision.Average(m=>m.VisionScore).ToString("0.0"),x,132,small,93,ctBlue);
+      Metric(content,"Průměr DMG",damage.Count==0?"—":damage.Average(m=>m.Damage).ToString("N0"),x+small+gap,132,small,93,danger);
+      Metric(content,"Průměr CS",cs.Count==0?"—":cs.Average(m=>m.Cs).ToString("0"),x+2*(small+gap),132,small,93,green);
+      Metric(content,"Průměr Gold",gold.Count==0?"—":gold.Average(m=>m.Gold).ToString("N0"),x+3*(small+gap),132,small,93,tGold);
+      int left=(int)(w*.53),right=w-left-gap;
+      Panel champ=Surface(content,x,241,left,Math.Max(269,h-258),card);
+      Copy(champ,"THRESH PERFORMANCE",15,14,left-30,27,14,accent,true);
+      List<Match> th=mm.Where(m=>string.Equals(m.Champion,"Thresh",StringComparison.OrdinalIgnoreCase)).ToList();
+      if(th.Count==0){Copy(champ,"Zatím žádné zápasy za Threshe. Po importu se zde objeví statistiky.",15,58,left-30,57,10,muted,false).AutoEllipsis=false;}
+      else{
+        int tw=th.Count(m=>m.Result=="Win");
+        Copy(champ,th.Count+" zápasů  ·  "+(100.0*tw/th.Count).ToString("0.0")+" % WR",15,60,left-30,37,18,green,true);
+        Copy(champ,"KDA: "+Ratio(th,"LoL")+"   •   AVG A: "+Avg(th,m=>m.Assists),15,110,left-30,31,12,fg,true);
+        var thv=th.Where(m=>m.VisionScore>=0).ToList();
+        Copy(champ,"VISION SCORE Ø: "+(thv.Count==0?"—":thv.Average(m=>m.VisionScore).ToString("0.0")),15,157,left-30,30,12,ctBlue,true);
+        Copy(champ,"Nejvíce asistencí: "+th.Max(m=>m.Assists),15,205,left-30,27,11,muted,false);
+      }
+      Panel roles=Surface(content,x+left+gap,241,right,Math.Max(269,h-258),card);
+      roles.AutoScroll=true;
+      Copy(roles,"ROLE PERFORMANCE",15,14,right-30,29,13,fg,true);
+      var byRole=mm.Where(m=>!string.IsNullOrEmpty(m.Role)).GroupBy(m=>m.Role)
+        .OrderByDescending(g=>g.Count()).ToList();
+      int yy=62;
+      foreach(var r in byRole.Take(6)){
+        int rw=r.Count(m=>m.Result=="Win");
+        Copy(roles,r.Key,15,yy,right-150,26,10,fg,true);
+        Copy(roles,r.Count()+" her · "+(rw*100.0/r.Count()).ToString("0")+"% WR",right-161,yy,147,26,9,green,true).TextAlign=ContentAlignment.MiddleRight;
+        yy+=43;
+      }
+      if(byRole.Count==0)Copy(roles,"Nové zápasy teprve získají data o rolích.",15,61,right-30,58,10,muted,false).AutoEllipsis=false;
+      roles.AutoScrollMinSize=new Size(0,Math.Max(0,yy+12));
+    }
+
     void BuildChampions(){
       int w=ViewWidth,h=ViewHeight,x=24;
       List<Match> mm=Of("LoL").Where(m=>!string.IsNullOrEmpty(m.Champion)).ToList();
@@ -878,7 +1057,10 @@ namespace GioviGG {
         int count=champ.Count(),wins=champ.Count(m=>m.Result=="Win");
         Panel row=Surface(scroll,0,y,Math.Max(250,scroll.Width-20),54,shade);
         Copy(row,champ.Key,15,10,(int)(row.Width*0.37),33,12,fg,true);
-        Copy(row,count+" ZÁPASŮ",(int)(row.Width*0.41),15,115,24,9,muted,true);
+        Copy(row,count+" ZÁPASŮ",(int)(row.Width*0.41),8,115,24,9,muted,true);
+        var vision=champ.Where(m=>m.VisionScore>=0).ToList();
+        Copy(row,"AVG VISION " +(vision.Count>0?vision.Average(m=>m.VisionScore).ToString("0"):"—"),
+          (int)(row.Width*0.41),29,142,19,8,muted,false);
         string wr=(wins*100.0/count).ToString("0")+" % WR";
         Copy(row,wr,row.Width-132,13,122,28,11,wins*2>=count?green:danger,true).TextAlign=ContentAlignment.MiddleRight;
         y+=61;
@@ -979,6 +1161,203 @@ namespace GioviGG {
       };
       RefreshHistory();
     }
+    // v1.0: date-driven insights built from local recorded matches/sessions only.
+    static string DayLabel(DateTime d){return d.ToString("dd.MM.yyyy");}
+    List<Match> MatchesOn(DateTime date){
+      return store.Matches.Where(m=>MatchDate(m).HasValue&&MatchDate(m).Value.Date==date.Date).OrderByDescending(m=>m.Date).ToList();
+    }
+    List<Session> SessionsOn(DateTime date){
+      return store.Sessions.Where(x=>ParseDate(x.Start).HasValue&&ParseDate(x.Start).Value.Date==date.Date).ToList();
+    }
+    DateTime? ParseDate(string val){
+      DateTime d;return DateTime.TryParse(val,System.Globalization.CultureInfo.InvariantCulture,
+        System.Globalization.DateTimeStyles.None,out d)?(DateTime?)d:null;
+    }
+    void BuildCalendar(){
+      int x=24,w=ViewWidth,h=ViewHeight;
+      if(h<658){content.AutoScroll=true;content.AutoScrollMinSize=new Size(0,730);}
+      string monthName=calendarMonth.ToString("MMMM yyyy",new System.Globalization.CultureInfo("cs-CZ")).ToUpperInvariant();
+      Panel head=Surface(content,x,7,w,69,shade);
+      Copy(head,"TVŮJ HERNÍ KALENDÁŘ",17,8,w-34,20,9,accent,true);
+      Copy(head,monthName,17,29,w-230,31,20,fg,true);
+      ButtonAt(head,"◀",w-167,15,43,37,()=>{calendarMonth=calendarMonth.AddMonths(-1);ShowPage("Calendar");},false);
+      ButtonAt(head,"DNES",w-118,15,67,37,()=>{calendarMonth=new DateTime(DateTime.Now.Year,DateTime.Now.Month,1);selectedDay=DateTime.Today;ShowPage("Calendar");},false);
+      ButtonAt(head,"▶",w-45,15,38,37,()=>{calendarMonth=calendarMonth.AddMonths(1);ShowPage("Calendar");},false);
+      int gridW=Math.Max(425,(int)(w*.61)),rightX=x+gridW+12,rightW=w-gridW-12;
+      Panel grid=Surface(content,x,89,gridW,Math.Max(477,h-99),card);
+      string[] days={"PO","ÚT","ST","ČT","PÁ","SO","NE"};
+      int gap=4,cellW=(gridW-25-6*gap)/7,cellH=56;
+      for(int d=0;d<7;d++)Copy(grid,days[d],12+d*(cellW+gap),10,cellW,22,9,muted,true).TextAlign=ContentAlignment.MiddleCenter;
+      int offset=((int)calendarMonth.DayOfWeek+6)%7;
+      int limit=DateTime.DaysInMonth(calendarMonth.Year,calendarMonth.Month);
+      for(int i=0;i<42;i++){
+        int day=i-offset+1;if(day<1||day>limit)continue;
+        DateTime date=calendarMonth.AddDays(day-1);
+        int row=i/7,col=i%7;
+        int bx=12+col*(cellW+gap),by=37+row*(cellH+gap);
+        var found=MatchesOn(date);int wins=found.Count(m=>m.Result=="Win");
+        bool chosen=selectedDay.Date==date.Date;
+        Panel cell=Surface(grid,bx,by,cellW,cellH,chosen?Color.FromArgb(68,53,97):shade);
+        if(date.Date==DateTime.Today.Date)Surface(cell,0,0,cellW,3,green);
+        Copy(cell,day.ToString(),6,4,cellW-12,24,11,chosen?accent:fg,true);
+        if(found.Count>0){
+          Copy(cell,found.Count+" HER · "+wins+" W",5,30,cellW-10,20,Math.Max(7f,cellW<62?7f:8f),green,false);
+        }else if(SessionsOn(date).Count>0)Copy(cell,"● HRÁNO",5,33,cellW-10,17,7,muted,true);
+        cell.Cursor=Cursors.Hand;
+        cell.Click+=(sender,args)=>{selectedDay=date;ShowPage("Calendar");};
+        foreach(Control inner in cell.Controls){
+          inner.Cursor=Cursors.Hand;
+          inner.Click+=(sender,args)=>{selectedDay=date;ShowPage("Calendar");};
+        }
+      }
+      Panel details=Surface(content,rightX,89,rightW,Math.Max(477,h-99),card);
+      List<Match> mm=MatchesOn(selectedDay);List<Session> sessions=SessionsOn(selectedDay);
+      Copy(details,DayLabel(selectedDay),17,15,rightW-30,37,18,fg,true);
+      Rule(details,15,59,rightW-30,line);
+      int winsDay=mm.Count(m=>m.Result=="Win"), losses=mm.Count(m=>m.Result=="Loss");
+      Copy(details,"ZÁPASY",17,74,rightW-28,19,9,muted,true);
+      Copy(details,mm.Count+"  ·  "+winsDay+" výher / "+losses+" proher",17,98,rightW-27,31,14,green,true);
+      long played=sessions.Sum(a=>a.Seconds);
+      Copy(details,"HERNÍ ČAS",17,137,rightW-28,18,9,muted,true);
+      Copy(details,(played/3600)+" h "+((played%3600)/60)+" min",17,160,rightW-25,29,14,fg,true);
+      Rule(details,15,203,rightW-30,line);
+      Copy(details,"CO JSI HRÁL",17,211,rightW-25,22,10,accent,true);
+      int py=243;
+      foreach(string game in games){
+        List<Match> gm=mm.Where(m=>m.Game==game).ToList();
+        long sec=sessions.Where(a=>a.Game==game).Sum(a=>a.Seconds);
+        if(gm.Count==0 && sec==0)continue;
+        Copy(details,game+" • "+gm.Count+" zápasů",16,py,rightW-30,25,11,fg,true);
+        Copy(details,(sec/60)+" minut  |  "+gm.Count(m=>m.Result=="Win")+" výher",16,py+23,rightW-30,22,9,muted,false);
+        py+=60;
+      }
+      if(py==243)Copy(details,"V tento den zatím nejsou zaznamenaná data.",16,247,rightW-30,60,10,muted,false).AutoEllipsis=false;
+      ButtonAt(details,"OTEVŘÍT HISTORII  →",14,details.Height-47,rightW-28,34,()=>ShowPage("History"),true);
+    }
+    void BuildSessions(){
+      int x=24,w=ViewWidth,h=ViewHeight;
+      Panel hero=Surface(content,x,9,w,101,shade);
+      Copy(hero,"GAMING SESSION RECAP",17,11,w-36,22,10,accent,true);
+      Copy(hero,store.Sessions.Count+" ukončených herních session",17,38,w-32,43,20,fg,true);
+      Panel list=Surface(content,x,127,w,Math.Max(200,h-136),card);list.AutoScroll=true;
+      var recent=store.Sessions.OrderByDescending(a=>a.Start).Take(160).ToList();
+      if(recent.Count==0){Copy(list,"Spusť CS2, LoL nebo R6 s běžící aplikací. Po ukončení hry tu najdeš recap.",18,24,w-40,70,11,muted,false).AutoEllipsis=false;return;}
+      int yy=10;
+      foreach(Session session in recent){
+        DateTime? date=ParseDate(session.Start);
+        DateTime start=date??DateTime.Today;DateTime end=start.AddSeconds(session.Seconds);
+        var matches=store.Matches.Where(m=>m.Game==session.Game&&MatchDate(m).HasValue&&
+          MatchDate(m).Value>=start&&MatchDate(m).Value<=end.AddSeconds(12)).ToList();
+        int wins=matches.Count(m=>m.Result=="Win");
+        Panel row=Surface(list,12,yy,Math.Max(330,w-48),86,shade);
+        Color mark=session.Game=="CS2"?tGold:session.Game=="LoL"?ctBlue:accent;
+        Surface(row,0,0,4,86,mark);
+        Copy(row,session.Game+"   /   "+start.ToString("dd.MM.yyyy  HH:mm"),16,7,row.Width-210,30,12,mark,true);
+        Copy(row,matches.Count+" zápasů  ·  "+wins+" výher  ·  "+matches.Sum(m=>m.Kills)+" killů",16,45,row.Width-28,27,10,fg,false);
+        Copy(row,(session.Seconds/3600)+"h "+((session.Seconds%3600)/60)+"m",row.Width-150,11,134,33,15,fg,true).TextAlign=ContentAlignment.MiddleRight;
+        yy+=96;
+      }
+      list.AutoScrollMinSize=new Size(0,yy+10);
+    }
+    Panel InsightCard(Control parent,int x,int y,int w,int height,string title,string body,Color hue){
+      Panel cardPanel=Surface(parent,x,y,w,height,card);
+      Surface(cardPanel,0,0,4,height,hue);
+      Copy(cardPanel,title,17,10,w-32,28,11,hue,true);
+      Label info=Copy(cardPanel,body,17,42,w-34,height-51,10,fg,false);info.AutoEllipsis=false;
+      return cardPanel;
+    }
+    string TrendText(List<Match> mm){
+      var sorted=mm.OrderByDescending(m=>m.Date).ToList();
+      if(sorted.Count<10)return "Pro smysluplné srovnání potřebujeme alespoň 10 zápasů.";
+      List<Match> last=sorted.Take(5).ToList(),previous=sorted.Skip(5).Take(5).ToList();
+      int a=last.Count(m=>m.Result=="Win"),b=previous.Count(m=>m.Result=="Win");
+      return "Posledních 5 her: "+a+" výher. Předchozích 5: "+b+" výher. "+
+        (a>b?"Zlepšení o "+((a-b)*20)+" procentních bodů.":a<b?"Pokles o "+((b-a)*20)+" procentních bodů.":"Stejná úspěšnost v obou obdobích.");
+    }
+    void BuildInsights(){
+      int x=24,w=ViewWidth,h=ViewHeight,gap=12;
+      if(h<665){content.AutoScroll=true;content.AutoScrollMinSize=new Size(0,700);}
+      Panel hero=Surface(content,x,9,w,82,shade);
+      Copy(hero,"SMART INSIGHTS",17,8,w-30,28,12,accent,true);
+      Copy(hero,"Data z tvých zápasů. Žádné vymyšlené statistiky ani placená AI.",17,38,w-36,24,10,fg,false);
+      int half=(w-gap)/2;
+      List<Match> lol=Of("LoL"),cs=Of("CS2"),r6=Of("R6");
+      InsightCard(content,x,105,half,135,"⚔  LEAGUE OF LEGENDS",TrendText(lol),ctBlue);
+      InsightCard(content,x+half+gap,105,half,135,"🔫  COUNTER-STRIKE 2",TrendText(cs),tGold);
+      var champs=lol.Where(m=>!string.IsNullOrEmpty(m.Champion)).GroupBy(m=>m.Champion).Where(g=>g.Count()>=3)
+        .OrderByDescending(g=>(double)g.Count(m=>m.Result=="Win")/g.Count()).ThenByDescending(g=>g.Count()).ToList();
+      string championInsight=champs.Count==0?"Na vývoj win rate u šampionů potřebujeme alespoň 3 zápasy na každého.":
+        "Nejúspěšnější šampion (min. 3 hry): "+champs[0].Key+" • "+
+        (100.0*champs[0].Count(m=>m.Result=="Win")/champs[0].Count()).ToString("0.0")+"% WR z "+champs[0].Count()+" her.";
+      InsightCard(content,x,253,half,135,"🏆  TVŮJ ŠAMPION",championInsight,green);
+      var known=KnownHs(cs);string hsInsight=known.Count==0?"HS% začne fungovat po nové instalaci GSI konfigurace a zaznamenání celého zápasu.":
+        "HS% napříč "+known.Count+" plně sledovanými zápasy: "+AllHs(cs)+
+        ". Neúplné a starší zápasy nejsou započítané.";
+      InsightCard(content,x+half+gap,253,half,135,"🎯  CS2 HEADSHOT INSIGHTS",hsInsight,tGold);
+      string r6msg=r6.Count==0?"Rainbow Six Siege zatím sleduje herní čas. Zápasy lze přidávat ručně.":
+        "Z "+r6.Count+" zaznamenaných zápasů máš "+r6.Count(m=>m.Result=="Win")+" výher a K/D "+Ratio(r6,"R6")+".";
+      InsightCard(content,x,401,half,125,"⬡  RAINBOW SIX SIEGE",r6msg,accent);
+      long secs=Seconds(null);int days=store.Sessions.Select(z=>ParseDate(z.Start)).Where(z=>z.HasValue).Select(z=>z.Value.Date).Distinct().Count();
+      InsightCard(content,x+half+gap,401,half,125,"◷  HERNÍ AKTIVITA",
+        "Sledováno "+(secs/3600)+"h "+((secs%3600)/60)+"min v "+days+" různých dnech. Celkem "+store.Matches.Count+" zápasů.",green);
+      ButtonAt(content,"ZOBRAZIT REKORDY  →",x,540,half,44,()=>ShowPage("Records"),true);
+      ButtonAt(content,"OTEVŘÍT KALENDÁŘ  →",x+half+gap,540,half,44,()=>ShowPage("Calendar"),false);
+    }
+    void BuildRecords(){
+      int x=24,w=ViewWidth,h=ViewHeight,gap=12;
+      if(h<670){content.AutoScroll=true;content.AutoScrollMinSize=new Size(0,720);}
+      Tabs(new string[]{"CS2","LOL","R6 SIEGE"},new string[]{"CS2","LoL","R6"},recordsGame,12,
+        chosen=>{recordsGame=chosen;ShowPage("Records");});
+      var mm=Of(recordsGame);
+      int gapW=(w-3*gap)/4;
+      Metric(content,"Zápasy",mm.Count.ToString(),x,73,gapW,95,accent);
+      Metric(content,"Nejvíce killů",mm.Count==0?"—":mm.Max(m=>m.Kills).ToString(),x+gapW+gap,73,gapW,95,green);
+      Metric(content,"Nejvíce asistencí",mm.Count==0?"—":mm.Max(m=>m.Assists).ToString(),x+2*(gapW+gap),73,gapW,95,fg);
+      Metric(content,"Nejdelší win streak",BestWinningStreak(mm).ToString(),x+3*(gapW+gap),73,gapW,95,tGold);
+      Panel box=Surface(content,x,184,w,Math.Max(425,h-196),card);
+      Copy(box,recordsGame=="CS2"?"MAP PERFORMANCE + HS%":recordsGame=="LoL"?"NEJHRANĚJŠÍ ŠAMPIONI":"VÝSLEDKY PODLE REŽIMU",16,15,w-32,33,15,fg,true);
+      Panel scrolling=Surface(box,12,58,w-24,Math.Max(180,box.Height-133),card);
+      scrolling.AutoScroll=true;
+      if(recordsGame=="CS2"){
+        var maps=mm.GroupBy(m=>(m.Queue??"").Split('·')[0].Trim()).OrderByDescending(g=>g.Count()).ToList();
+        int yy=62;
+        foreach(var map in maps.Take(10)){
+          string mapName=string.IsNullOrWhiteSpace(map.Key)?"Neznámá mapa":map.Key;
+          var rows=map.ToList();int wins=rows.Count(m=>m.Result=="Win");
+          Panel row=Surface(scrolling,3,yy-62,w-48,39,shade);
+          Copy(row,mapName,13,8,(int)(row.Width*.31),27,10,fg,true);
+          Copy(row,rows.Count+" her",(int)(row.Width*.34),8,76,25,9,muted,false);
+          Copy(row,"WR "+(100.0*wins/rows.Count).ToString("0")+"%",(int)(row.Width*.55),8,95,26,10,green,true);
+          Copy(row,"HS "+AllHs(rows),row.Width-122,7,110,28,10,tGold,true).TextAlign=ContentAlignment.MiddleRight;
+          yy+=47;
+        }
+        if(maps.Count==0)Copy(scrolling,"Zatím nemáš uložené CS2 zápasy.",5,5,w-50,32,11,muted,false);
+        scrolling.AutoScrollMinSize=new Size(0,Math.Max(0,yy-62+12));
+        int bestHs=KnownHs(mm).Count==0?-1:KnownHs(mm).Max(m=>m.Headshots);
+        Copy(box,"CELKOVÉ HS%: "+AllHs(mm)+"    •    NEJVÍCE HS V ZÁPASE: "+Optional(bestHs),17,box.Height-61,w-35,31,12,tGold,true);
+      }else{
+        Func<Match,string> key=m=>recordsGame=="LoL"?(string.IsNullOrEmpty(m.Champion)?"Neznámý šampion":m.Champion):(string.IsNullOrEmpty(m.Queue)?"Neznámý režim":m.Queue);
+        var groups=mm.GroupBy(key).OrderByDescending(g=>g.Count()).Take(9).ToList();
+        int yy=62;
+        foreach(var group in groups){
+          Panel row=Surface(scrolling,3,yy-62,w-48,42,shade);
+          int wins=group.Count(m=>m.Result=="Win");
+          Copy(row,group.Key,14,9,(int)(row.Width*.45),29,11,fg,true);
+          Copy(row,group.Count()+" her",(int)(row.Width*.50),10,75,25,10,muted,false);
+          Copy(row,"WR "+(100.0*wins/group.Count()).ToString("0")+"%",row.Width-124,8,112,28,11,green,true).TextAlign=ContentAlignment.MiddleRight;
+          yy+=50;
+        }
+        if(groups.Count==0)Copy(scrolling,"Zatím nejsou uložené zápasy.",5,5,w-50,29,11,muted,false);
+        scrolling.AutoScrollMinSize=new Size(0,Math.Max(0,yy-62+12));
+        if(recordsGame=="LoL"){
+          var vis=mm.Where(m=>m.VisionScore>=0).ToList();
+          Copy(box,"PRŮMĚRNÝ VISION SCORE: "+(vis.Count>0?vis.Average(m=>m.VisionScore).ToString("0.0"):"—")+
+            "   •   CELKOVÉ ZAZNAMENANÉ DMG: "+mm.Where(m=>m.Damage>=0).Sum(m=>m.Damage).ToString("N0"),
+            18,box.Height-61,w-38,31,11,ctBlue,true);
+        }
+      }
+    }
+
     void BuildSettings(){
       int w=ViewWidth,h=ViewHeight,x=24;
       Tabs(new string[]{"AKTUALIZACE","PROPOJENÍ","DATA A START"},new string[]{"Updates","Connect","Data"},settingsTab,12,selected=>{settingsTab=selected;ShowPage("Settings");});
@@ -991,8 +1370,8 @@ namespace GioviGG {
         Button check=ButtonAt(area,updateBusy?"KONTROLUJI...":"CHECK FOR UPDATES",20,185,222,40,()=>BeginUpdateCheck(false),true);check.Enabled=!updateBusy;
         if(availableUpdate!=null){Button install=ButtonAt(area,"INSTALL v"+availableUpdate.Number.ToString(),256,185,216,40,()=>StartUpdate(),false);install.Enabled=!updateBusy;}
         Rule(area,20,247,width-40,line);
-        Copy(area,"Novinky ve verzi 0.7.0",20,264,width-40,26,11,fg,true);
-        Copy(area,"NOVĚ: CS2 Game State Integration (živá K/D/A a detekce konce zápasu), připnuté filtry historie, modernizovaný přehled, lepší orientace a zachované statistiky.",20,298,width-44,76,10,muted,false).AutoEllipsis=false;
+        Copy(area,"Novinky ve verzi 1.0.0",20,264,width-40,26,11,fg,true);
+        Copy(area,"ULTIMATE 1.0: CS2 headshoty a HS%, live statistiky, mapa, osobní rekordy, herní kalendář, session recap, smart insights, hlubší LoL statistiky, rozšířené achievementy a přehlednější navigace.",20,298,width-44,76,10,muted,false).AutoEllipsis=false;
       }else if(settingsTab=="Connect"){
         Copy(area,"LEAGUE OF LEGENDS",20,20,width-40,30,13,accent,true);
         Copy(area,riot.GameName+"#"+riot.TagLine+"  •  "+riot.Region.ToUpperInvariant(),20,60,width-40,27,12,fg,true);
@@ -1001,16 +1380,17 @@ namespace GioviGG {
         Button sync=ButtonAt(area,riotSyncBusy?"SYNCHRONIZUJI...":"SYNC MATCHES",265,162,202,40,()=>TrySyncLoL(false),false);sync.Enabled=!riotSyncBusy;
         Rule(area,20,226,width-40,line);
         Copy(area,"COUNTER-STRIKE 2 • GSI",20,237,width-40,25,12,fg,true);
-        Copy(area,"Živá K/D/A a skóre přímo z CS2. Při zachyceném konci zápasu uložíme výsledek. Bez zásahů do hry.",20,269,width-42,48,9,muted,false).AutoEllipsis=false;
+        Copy(area,"Živá K/D/A, skóre a HS% z GSI. Pro HS% je NUTNÉ znovu vygenerovat CFG a restartovat CS2. Staré zápasy bez HS dat zůstávají neznámé.",20,269,width-42,48,9,muted,false).AutoEllipsis=false;
         ButtonAt(area,"NASTAVIT CS2 GSI",20,322,220,38,()=>ConfigureCs2Gsi(),true);
         Copy(area,cs2Status,257,320,Math.Max(160,width-284),72,9,muted,false).AutoEllipsis=false;
-        Copy(area,"R6 Siege: nyní automaticky pouze herní čas · Riot API klíč zůstává v paměti.",20,403,width-40,32,9,muted,false);
+        Copy(area,"R6 Siege: zatím jen herní čas + ruční zápasy · Riot API klíč zůstává v paměti.",20,403,width-40,32,9,muted,false);
       }else{
         Copy(area,"MOJE DATA",20,20,width-40,28,13,accent,true);
         Copy(area,"Statistiky jsou uložené lokálně na tvém počítači.",20,59,width-40,40,10,muted,false);
         Copy(area,store.FileName,20,101,width-40,38,9,fg,false);
         ButtonAt(area,"OTEVŘÍT SLOŽKU",20,153,205,39,()=>Process.Start("explorer.exe",store.Folder),false);
         ButtonAt(area,"ZÁLOHOVAT DATA",239,153,205,39,()=>BackupStats(),true);
+        ButtonAt(area,"OBNOVIT ZE ZÁLOHY",458,153,218,39,()=>RestoreStats(),false);
         Rule(area,20,219,width-40,line);
         Copy(area,"SPUŠTĚNÍ S WINDOWS",20,241,width-40,27,12,fg,true);
         Copy(area,"Detekce spuštěných her běží každých 15 sekund i po minimalizaci do lišty.",20,274,width-40,49,10,muted,false).AutoEllipsis=false;
@@ -1030,7 +1410,8 @@ namespace GioviGG {
         Copy(row,m.Game+"  •  "+(m.Result=="Win"?"WIN":m.Result=="Loss"?"LOSS":m.Result),12,4,titleW-10,23,10,m.Result=="Win"?green:m.Result=="Loss"?danger:muted,true);
         string description=!string.IsNullOrEmpty(m.Champion)?m.Champion+(string.IsNullOrEmpty(m.Queue)?"":" · "+m.Queue):(m.Source??"Manual");
         Copy(row,description,12,26,titleW-10,18,8,muted,false);
-        Copy(row,m.Kills+" / "+m.Deaths+" / "+m.Assists,(int)(rowW*0.46),11,(int)(rowW*0.25),27,10,fg,true);
+        Copy(row,m.Kills+" / "+m.Deaths+" / "+m.Assists,(int)(rowW*0.46),6,(int)(rowW*0.25),25,10,fg,true);
+        if(m.Game=="CS2" && rowW>=510)Copy(row,"HS "+FormatHs(m)+(m.HeadshotsPartial?" *":""),(int)(rowW*0.46),28,(int)(rowW*0.24),17,8,m.Headshots>=0?tGold:muted,true);
         string date=m.Date??"";
         if(date.Length>=16)date=date.Substring(5,11).Replace('T',' ');
         if(rowW>=520)Copy(row,date,rowW-178,13,94,22,8,muted,false).TextAlign=ContentAlignment.MiddleRight;
@@ -1042,7 +1423,7 @@ namespace GioviGG {
     void ShowMatchDetail(Match match){
       using(Form dlg=new Form()){
         dlg.Text="GIOVI.GG — Detail zápasu";
-        dlg.BackColor=side;dlg.ForeColor=fg;dlg.ClientSize=new Size(492,413);
+        dlg.BackColor=side;dlg.ForeColor=fg;dlg.ClientSize=new Size(500,505);
         dlg.StartPosition=FormStartPosition.CenterParent;dlg.FormBorderStyle=FormBorderStyle.FixedDialog;
         dlg.MaximizeBox=false;dlg.MinimizeBox=false;
         AddText(dlg,match.Game+"   •   "+(match.Result=="Win"?"VÝHRA":match.Result=="Loss"?"PROHRA":"REMÍZA"),23,19,445,34,18,match.Result=="Win"?green:danger,true);
@@ -1054,8 +1435,14 @@ namespace GioviGG {
           "Délka: "+(match.Duration>0?(match.Duration/60)+" min "+(match.Duration%60)+" s":"—"),
           "Zdroj: "+(match.Source??"Manual")};
         for(int i=0;i<items.Length;i++)AddText(dlg,items[i],23,158+30*i,448,26,10,i==4?muted:fg,false);
-        ButtonAt(dlg,"ZAVŘÍT",25,351,200,39,()=>dlg.Close(),false);
-        ButtonAt(dlg,"SMAZAT ZÁPAS",244,351,225,39,()=>{
+        if(match.Game=="CS2"){
+          AddText(dlg,"HEADSHOTS: "+(match.Headshots<0?"— (nezaznamenáno)":match.Headshots+"  /  "+FormatHs(match))+(match.HeadshotsPartial?"  (neúplná data)":""),23,314,456,30,12,tGold,true);
+        }else if(match.Game=="LoL"){
+          AddText(dlg,"ROLE: "+(match.Role==""?"—":match.Role)+"    VISION: "+Optional(match.VisionScore)+"    WARDS: "+Optional(match.Wards),23,314,456,26,10,accent,true);
+          AddText(dlg,"DMG: "+Optional(match.Damage)+"    GOLD: "+Optional(match.Gold)+"    CS: "+Optional(match.Cs),23,344,456,25,10,fg,false);
+        }
+        ButtonAt(dlg,"ZAVŘÍT",25,445,200,39,()=>dlg.Close(),false);
+        ButtonAt(dlg,"SMAZAT ZÁPAS",244,445,225,39,()=>{
           if(MessageBox.Show(dlg,"Opravdu chceš tento zápas odstranit?"+(match.Source=="Riot API"?"\nRiot sync ho může později znovu načíst.":""),
             "Potvrzení smazání",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
           if(!store.Matches.Contains(match))return;
@@ -1074,8 +1461,8 @@ namespace GioviGG {
         if(dlg.ShowDialog(this)!=DialogResult.OK)return;
         try{
           using(StreamWriter w=new StreamWriter(dlg.FileName,false,new System.Text.UTF8Encoding(true))){
-            w.WriteLine("Game,Date,Result,Kills,Deaths,Assists,Champion,Queue,Source,MatchID");
-            foreach(Match m in store.Matches) w.WriteLine(Csv(m.Game)+","+Csv(m.Date)+","+Csv(m.Result)+","+m.Kills+","+m.Deaths+","+m.Assists+","+Csv(m.Champion)+","+Csv(m.Queue)+","+Csv(m.Source)+","+Csv(m.MatchId));
+            w.WriteLine("Game,Date,Result,Kills,Deaths,Assists,Champion,Queue,Source,MatchID,Headshots,HSPercent,HSPartial,Vision,Wards,Damage,Gold,CS,Role");
+            foreach(Match m in store.Matches) w.WriteLine(Csv(m.Game)+","+Csv(m.Date)+","+Csv(m.Result)+","+m.Kills+","+m.Deaths+","+m.Assists+","+Csv(m.Champion)+","+Csv(m.Queue)+","+Csv(m.Source)+","+Csv(m.MatchId)+","+Csv(m.Headshots<0?"":m.Headshots.ToString())+","+Csv(m.Headshots<0?"":FormatHs(m))+","+Csv(m.HeadshotsPartial?"partial":"")+","+Csv(OptionalCsv(m.VisionScore))+","+Csv(OptionalCsv(m.Wards))+","+Csv(OptionalCsv(m.Damage))+","+Csv(OptionalCsv(m.Gold))+","+Csv(OptionalCsv(m.Cs))+","+Csv(m.Role));
           }
           MessageBox.Show("Exportováno: "+dlg.FileName,"GIOVI.GG");
         }catch(Exception ex){MessageBox.Show(ex.Message,"CSV export error");}
@@ -1099,6 +1486,29 @@ namespace GioviGG {
         }
       }
     }
+    void RestoreStats(){
+      if(active.Count>0){MessageBox.Show(this,"Obnovení proveď až po ukončení her, aby se nenačetla neúplná session.","GIOVI.GG");return;}
+      using(OpenFileDialog dialog=new OpenFileDialog()){
+        dialog.Filter="XML záloha (*.xml)|*.xml";dialog.Title="Obnovit statistiky z XML zálohy";
+        if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+        if(MessageBox.Show(this,"Aktuální data se zazálohují do složky GioviGG, potom se nahradí zvolenou zálohou. Pokračovat?",
+          "Obnova statistik",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+        try {
+          FileInfo source=new FileInfo(dialog.FileName);
+          if(source.Length<10 || source.Length>100*1024*1024)throw new Exception("Neplatná velikost zálohy.");
+          XDocument doc=XDocument.Load(dialog.FileName);
+          if(doc.Root==null || doc.Root.Name!="giovi")throw new Exception("Soubor není záloha GIOVI.GG.");
+          string backup=Path.Combine(store.Folder,"tracker-before-restore-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".xml");
+          store.Save();File.Copy(store.FileName,backup,true);
+          string temp=store.FileName+".restore";
+          File.Copy(dialog.FileName,temp,true);
+          if(File.Exists(store.FileName))File.Replace(temp,store.FileName,null);else File.Move(temp,store.FileName);
+          store.Reload();ShowPage(page);
+          MessageBox.Show(this,"Obnoveno! Předchozí data: "+backup,"GIOVI.GG",MessageBoxButtons.OK,MessageBoxIcon.Information);
+        }catch(Exception ex){MessageBox.Show(this,"Obnova selhala: "+ex.Message,"GIOVI.GG",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+      }
+    }
+
     void DeleteMatch(){
       if(store.Matches.Count==0){MessageBox.Show("Žádné zápasy k odstranění.");return;}
       Match m=store.Matches.OrderByDescending(a=>a.Date).First();
@@ -1302,9 +1712,153 @@ namespace GioviGG {
         ExitApp();
       }catch(Exception ex){updateBusy=false;updateMessage="Instalace selhala: "+ex.Message;if(page=="Settings")ShowPage("Settings");MessageBox.Show(this,ex.Message,"GIOVI.GG updater",MessageBoxButtons.OK,MessageBoxIcon.Error);}
     }
+    // Simple, responsive CS2 live UI. No chart dependencies or game-memory reading.
+    bool Cs2Online(){return cs2State.SeenUtc!=DateTime.MinValue &&
+      DateTime.UtcNow-cs2State.SeenUtc<TimeSpan.FromSeconds(40);}
+    Label Cs2Bind(string key,Control parent,string initial,int x,int y,int width,int height,float size,Color color,bool bold){
+      Label item=Copy(parent,initial,x,y,width,height,size,color,bold);
+      cs2Ui[key]=item;
+      return item;
+    }
+    void Cs2Set(string key,string value,Color color){
+      Label label;
+      if(cs2Ui.TryGetValue(key,out label) && label!=null && !label.IsDisposed){
+        if(label.Text!=value)label.Text=value;
+        if(label.ForeColor!=color)label.ForeColor=color;
+      }
+    }
+    string Cs2HsText(){
+      if(cs2State.Headshots<0 || cs2State.Kills<=0)return "—";
+      return (100.0*Math.Min(cs2State.Kills,cs2State.Headshots)/cs2State.Kills).ToString("0.0")+"%"+(cs2State.HeadshotsPartial?" *":"");
+    }
+    void UpdateCs2Widgets(){
+      bool online=Cs2Online();
+      string map=online && !string.IsNullOrEmpty(cs2State.Map)?cs2State.Map:"ČEKÁM NA MAPU";
+      string mode=online && !string.IsNullOrEmpty(cs2State.Mode)?cs2State.Mode.ToUpperInvariant():"CS2 / GAME STATE INTEGRATION";
+      string phase=online && !string.IsNullOrEmpty(cs2State.Phase)?cs2State.Phase.ToUpperInvariant():"OFFLINE";
+      string sideName=cs2State.Team.Equals("CT",StringComparison.OrdinalIgnoreCase)?"COUNTER-TERRORISTS":
+        cs2State.Team.Equals("T",StringComparison.OrdinalIgnoreCase)?"TERRORISTS":"NEURČENO";
+      string freshness=online?"● LIVE DATA":"○ ČEKÁM NA DATA";
+      Cs2Set("previewStatus",freshness,online?green:muted);
+      Cs2Set("previewMap",map,fg);
+      Cs2Set("previewMode",mode,muted);
+      Cs2Set("previewCt",online?cs2State.Ct.ToString():"—",ctBlue);
+      Cs2Set("previewT",online?cs2State.T.ToString():"—",tGold);
+      Cs2Set("previewKills",online&&cs2State.HasStats?cs2State.Kills.ToString():"—",fg);
+      Cs2Set("previewDeaths",online&&cs2State.HasStats?cs2State.Deaths.ToString():"—",fg);
+      Cs2Set("previewAssists",online&&cs2State.HasStats?cs2State.Assists.ToString():"—",fg);
+      Cs2Set("previewHs",online&&cs2State.Headshots>=0?Cs2HsText():"—",tGold);
+      Cs2Set("liveStatus",online?"●  PŘIPOJENO — REAL-TIME":"○  ČEKÁM NA PŘIPOJENÍ",online?green:muted);
+      Cs2Set("liveMap",map,fg);
+      Cs2Set("liveMode",mode,muted);
+      Cs2Set("liveCt",online?cs2State.Ct.ToString():"—",ctBlue);
+      Cs2Set("liveT",online?cs2State.T.ToString():"—",tGold);
+      Cs2Set("liveKills",online&&cs2State.HasStats?cs2State.Kills.ToString():"—",green);
+      Cs2Set("liveDeaths",online&&cs2State.HasStats?cs2State.Deaths.ToString():"—",danger);
+      Cs2Set("liveAssists",online&&cs2State.HasStats?cs2State.Assists.ToString():"—",accent);
+      Cs2Set("liveHeadshots",online&&cs2State.Headshots>=0?cs2State.Headshots.ToString():"—",tGold);
+      Cs2Set("liveHs",online&&cs2State.Headshots>=0?Cs2HsText():"—",tGold);
+      Cs2Set("livePhase",phase,online?green:muted);
+      Cs2Set("liveTeam",sideName,online?fg:muted);
+      string ratio=online&&cs2State.HasStats?(cs2State.Deaths==0?""+cs2State.Kills:(cs2State.Kills/(double)cs2State.Deaths).ToString("0.00")):"—";
+      Cs2Set("liveKdr",ratio,fg);
+      Cs2Set("liveSignal",online?"Poslední herní data: "+(int)Math.Max(0,(DateTime.UtcNow-cs2State.SeenUtc).TotalSeconds)+" s zpět":"GIOVI.GG čeká na události z CS2",online?green:muted);
+      Cs2Set("liveHint",online?"Zápas se uloží po zachycení konce hry (gameover) a platných výsledků.":
+        "Spusť CS2 s nastaveným GSI a nech GIOVI.GG běžet na pozadí.",muted);
+      if(cs2CtBar!=null&&!cs2CtBar.IsDisposed && cs2TBar!=null&&!cs2TBar.IsDisposed){
+        int total=cs2State.Ct+cs2State.T;
+        int width=Math.Max(1,cs2CtBar.Parent.ClientSize.Width);
+        cs2CtBar.Width=online&&total>0?Math.Max(3,(int)(width*cs2State.Ct/(double)total)):3;
+        cs2TBar.Width=online&&total>0?Math.Max(3,(int)(width*cs2State.T/(double)total)):3;
+      }
+    }
+    void BuildCs2Mini(Panel panel,int width,int height){
+      Surface(panel,0,0,width,3,ctBlue);
+      Copy(panel,"CS2  /  LIVE MATCH",16,13,width-32,25,11,fg,true);
+      Cs2Bind("previewStatus",panel,"",16,42,width-32,22,9,muted,true);
+      Rule(panel,15,70,width-30,line);
+      Cs2Bind("previewMap",panel,"",16,78,width-32,30,14,fg,true);
+      Cs2Bind("previewMode",panel,"",16,105,width-32,22,8,muted,true);
+      Panel board=Surface(panel,15,131,width-30,64,shade);
+      Copy(board,"CT",14,8,40,20,9,ctBlue,true);
+      Cs2Bind("previewCt",board,"—",14,27,62,34,21,ctBlue,true);
+      Copy(board,"T",board.Width-76,8,60,20,9,tGold,true).TextAlign=ContentAlignment.MiddleRight;
+      Cs2Bind("previewT",board,"—",board.Width-75,27,60,34,21,tGold,true).TextAlign=ContentAlignment.MiddleRight;
+      Copy(board,"VS",board.Width/2-16,22,32,22,9,muted,true).TextAlign=ContentAlignment.MiddleCenter;
+      int buttonY=height-45;
+      if(height>=330){
+        int col=(width-30)/3;
+        string[] names={"K","D","A"};string[] keys={"previewKills","previewDeaths","previewAssists"};
+        for(int i=0;i<3;i++){
+          int px=15+i*col;
+          Copy(panel,names[i],px,209,col-3,18,9,muted,true).TextAlign=ContentAlignment.MiddleCenter;
+          Cs2Bind(keys[i],panel,"—",px,226,col-3,29,17,fg,true).TextAlign=ContentAlignment.MiddleCenter;
+        }
+      }
+      if(height>=330){
+        Copy(panel,"HS%",15,263,58,20,9,muted,true);
+        Cs2Bind("previewHs",panel,"—",70,262,Math.Max(80,width-84),24,13,tGold,true);
+      }
+      ButtonAt(panel,"OTEVŘÍT LIVE MATCH  →",13,buttonY,width-26,34,()=>{gameTab="Live";ShowPage("CS2");},true);
+      UpdateCs2Widgets();
+    }
+    void Cs2Metric(Control parent,string label,string key,int x,int y,int width,int height,Color color){
+      Panel tile=Surface(parent,x,y,width,height,card);
+      Surface(tile,0,0,4,height,color);
+      Copy(tile,label,17,13,width-32,19,9,muted,true);
+      Cs2Bind(key,tile,"—",17,38,width-32,49,27,color,true);
+    }
+    void BuildCs2Live(){
+      int w=ViewWidth,h=ViewHeight,x=24;
+      // Only the dedicated live screen scrolls, and only if the window is short.
+      if(content.ClientSize.Height<715){content.AutoScroll=true;content.AutoScrollMinSize=new Size(0,718);}
+      Panel hero=Surface(content,x,65,w,190,shade);
+      Surface(hero,0,0,5,190,ctBlue);
+      Cs2Bind("liveMap",hero,"ČEKÁM NA MAPU",22,15,Math.Max(190,w-340),32,19,fg,true);
+      Cs2Bind("liveMode",hero,"CS2 / GSI",23,49,Math.Max(180,w-340),22,9,muted,true);
+      Cs2Bind("liveStatus",hero,"",Math.Max(220,w-306),20,280,29,10,green,true).TextAlign=ContentAlignment.MiddleRight;
+      ButtonAt(hero,"NASTAVIT GSI",w-189,48,167,28,()=>ConfigureCs2Gsi(),false);
+      Rule(hero,21,83,w-42,line);
+      int two=(w-70)/2;
+      Panel ct=Surface(hero,20,95,two,78,Color.FromArgb(29,44,66));
+      Panel t=Surface(hero,50+two,95,two,78,Color.FromArgb(63,43,35));
+      Copy(ct,"COUNTER-TERRORISTS",13,9,two-95,21,9,ctBlue,true);
+      Cs2Bind("liveCt",ct,"—",two-88,13,75,52,31,ctBlue,true).TextAlign=ContentAlignment.MiddleRight;
+      Copy(t,"TERRORISTS",13,9,two-95,21,9,tGold,true);
+      Cs2Bind("liveT",t,"—",two-88,13,75,52,31,tGold,true).TextAlign=ContentAlignment.MiddleRight;
+      Panel ctTrack=Surface(ct,13,63,two-26,5,line);
+      Panel tTrack=Surface(t,13,63,two-26,5,line);
+      cs2CtBar=Surface(ctTrack,0,0,3,5,ctBlue);
+      cs2TBar=Surface(tTrack,0,0,3,5,tGold);
+      Copy(hero,"VS",w/2-18,124,37,23,10,muted,true).TextAlign=ContentAlignment.MiddleCenter;
+      int gap=9,metric=(w-4*gap)/5,yy=267;
+      Cs2Metric(content,"KILLS","liveKills",x,yy,metric,96,green);
+      Cs2Metric(content,"DEATHS","liveDeaths",x+(metric+gap),yy,metric,96,danger);
+      Cs2Metric(content,"ASSISTS","liveAssists",x+2*(metric+gap),yy,metric,96,accent);
+      Cs2Metric(content,"HEADSHOTS","liveHeadshots",x+3*(metric+gap),yy,metric,96,tGold);
+      Cs2Metric(content,"HS%","liveHs",x+4*(metric+gap),yy,metric,96,tGold);
+      Panel details=Surface(content,x,376,w,105,card);
+      Copy(details,"STAV ZÁPASU",17,14,166,20,9,muted,true);
+      Cs2Bind("livePhase",details,"OFFLINE",17,41,Math.Max(145,w/4),33,18,fg,true);
+      Surface(details,(int)(w*.29),12,1,72,line);
+      Copy(details,"TVŮJ TÝM",(int)(w*.32),14,Math.Max(150,w/3),20,9,muted,true);
+      Cs2Bind("liveTeam",details,"NEURČENO",(int)(w*.32),41,Math.Max(150,(int)(w*.40)),32,13,fg,true);
+      Copy(details,"K/D",w-147,14,120,22,9,muted,true).TextAlign=ContentAlignment.MiddleRight;
+      Cs2Bind("liveKdr",details,"—",w-147,39,120,35,20,fg,true).TextAlign=ContentAlignment.MiddleRight;
+      Cs2Bind("liveSignal",details,"",17,81,w-32,19,8,muted,false);
+      Copy(content,"* HS% s hvězdičkou = neúplný záznam (tracker se připojil během zápasu).",x,482,w,20,8,muted,false);
+      Panel recent=Surface(content,x,508,w,Math.Max(151,h-517),card);
+      Copy(recent,"POSLEDNÍ CS2 ZÁPASY",15,14,w-195,24,11,fg,true);
+      ButtonAt(recent,"VŠECHNY  →",w-151,10,135,32,()=>{gameTab="Matches";ShowPage("CS2");},false);
+      List<Match> rows=Of("CS2").OrderByDescending(m=>m.Date).Take(3).ToList();
+      MatchList(recent,rows,12,51,w-24,Math.Max(86,recent.Height-62),3);
+      // The tracking explanation stays visible at the top; only the recent list scrolls.
+      content.AutoScrollMinSize=new Size(0,Math.Max(h+4,704));
+      UpdateCs2Widgets();
+    }
     void ReceiveCs2(Cs2State snapshot,Match completed){
       cs2State=snapshot;
-      cs2Status="CS2 GSI: "+snapshot.Map+" / "+snapshot.Phase+" · "+snapshot.Kills+" / "+snapshot.Deaths+" / "+snapshot.Assists;
+      cs2Status="CS2 GSI: "+snapshot.Map+" / "+snapshot.Phase+" · "+snapshot.Kills+" / "+snapshot.Deaths+" / "+snapshot.Assists+" · HS "+Cs2HsText();
       if(completed!=null){
         if(!store.Matches.Any(m=>m.MatchId==completed.MatchId)){
           store.Matches.Add(completed);
@@ -1313,14 +1867,7 @@ namespace GioviGG {
         }
         if(page=="CS2"||page=="Overview"||page=="History"||page=="Analytics")ShowPage(page);
       }
-      if(cs2LiveLabel!=null && !cs2LiveLabel.IsDisposed)cs2LiveLabel.Text=Cs2LiveText();
-    }
-    string Cs2LiveText(){
-      if(cs2State.SeenUtc==DateTime.MinValue || DateTime.UtcNow-cs2State.SeenUtc>TimeSpan.FromSeconds(40))
-        return "Čekám na data z CS2. V Nastavení → Propojení nainstaluj GSI konfiguraci a restartuj CS2.";
-      return "MAPA: " + cs2State.Map + "\r\n" +
-        "FÁZE: " + cs2State.Phase + "     SKÓRE CT/T: " + cs2State.Ct + " : " + cs2State.T + "\r\n" +
-        "TVÉ K/D/A: " + cs2State.Kills + " / " + cs2State.Deaths + " / " + cs2State.Assists;
+      if(page=="CS2")UpdateCs2Widgets();
     }
     void ConfigureCs2Gsi(){
       if(cs2Receiver==null){MessageBox.Show(this,cs2Status,"CS2 GSI",MessageBoxButtons.OK,MessageBoxIcon.Warning);return;}
@@ -1348,7 +1895,16 @@ namespace GioviGG {
        for(int i=0;i<games.Length;i++){string g=games[i];bool found=processes[i].Any(exe=>running.Contains(exe));if(found&&!active.ContainsKey(g)){active[g]=now;changed=true;}else if(!found&&active.ContainsKey(g)){Finish(g,now);changed=true;if(g=="LoL")TrySyncLoL(true);}}
        if(changed){UpdateLiveStatus();ShowPage(page);}
       }catch(Exception){status.Text="● DETECTION ERROR";}}
-    void Finish(string game,DateTime end){DateTime start=active[game];active.Remove(game);long seconds=Math.Max(0,(long)(end-start).TotalSeconds);if(seconds>0){store.Sessions.Add(new Session{Game=game,Start=start.ToString("yyyy-MM-ddTHH:mm:ss"),Seconds=seconds});try{store.Save();}catch(Exception ex){MessageBox.Show("Chyba ukládání session: "+ex.Message);}}}
+    void Finish(string game,DateTime end){DateTime start=active[game];active.Remove(game);long seconds=Math.Max(0,(long)(end-start).TotalSeconds);if(seconds>0){store.Sessions.Add(new Session{Game=game,Start=start.ToString("yyyy-MM-ddTHH:mm:ss"),Seconds=seconds});try{store.Save();}catch(Exception ex){MessageBox.Show("Chyba ukládání session: "+ex.Message);}
+        if(tray!=null && !exiting){
+          List<Match> recap=store.Matches.Where(m=>m.Game==game && MatchDate(m).HasValue &&
+            MatchDate(m).Value>=start && MatchDate(m).Value<=end.AddSeconds(10)).ToList();
+          int wins=recap.Count(m=>m.Result=="Win");
+          tray.BalloonTipTitle="GIOVI.GG — " + game + " session";
+          tray.BalloonTipText=(seconds/3600)+" h "+((seconds%3600)/60)+" min • "+recap.Count+" zápasů • "+wins+" výher";
+          tray.ShowBalloonTip(4000);
+        }
+      }}
     bool AutoStartEnabled(){using(RegistryKey k=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run",false)){return k!=null&&k.GetValue("GioviGG")!=null;}}
     void ToggleAutoStart(){try{using(RegistryKey k=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run",true)){if(AutoStartEnabled()) k.DeleteValue("GioviGG",false);else k.SetValue("GioviGG","\""+Application.ExecutablePath+"\"");}}catch(Exception ex){MessageBox.Show(ex.Message,"Autostart error");}}
     void RestoreApp(){Show();WindowState=FormWindowState.Normal;Activate();}
