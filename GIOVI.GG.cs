@@ -12,6 +12,10 @@ using System.Threading.Tasks;
 using System.Text;
 using System.Web.Script.Serialization;
 using Microsoft.Win32;
+using System.Reflection;
+
+[assembly: AssemblyVersion("0.4.1.0")]
+[assembly: AssemblyFileVersion("0.4.1.0")]
 
 namespace GioviGG {
   class Match { public string Game, Date, Result; public int Kills, Deaths, Assists; }
@@ -50,7 +54,7 @@ namespace GioviGG {
     public string Tag, Notes, DownloadUrl, Digest;
   }
   class App : Form {
-    const string CurrentVersion = "0.4.0";
+    const string CurrentVersion = "0.4.1";
     const string ReleaseApi = "https://api.github.com/repos/KingGiovi/GIOVI-GG/releases/latest";
     UpdateInfo availableUpdate;
     bool updateBusy = false;
@@ -69,7 +73,7 @@ namespace GioviGG {
     string page = "Overview";
     bool exiting = false;
     public App() {
-      Text = "GIOVI.GG — Ultimate Gaming Hub v0.4"; Width = 1160; Height = 780; MinimumSize = new Size(1050,650); StartPosition = FormStartPosition.CenterScreen; BackColor = bg; ForeColor = fg; Font = new Font("Segoe UI", 10f);
+      Text = "GIOVI.GG — Ultimate Gaming Hub v0.4.1"; Width = 1160; Height = 780; MinimumSize = new Size(1050,650); StartPosition = FormStartPosition.CenterScreen; BackColor = bg; ForeColor = fg; Font = new Font("Segoe UI", 10f);
       // Fixed two-column layout: sidebar occupies its own column, never overlays content.
       TableLayoutPanel shell = new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=2, RowCount=1, Margin=new Padding(0), Padding=new Padding(0), BackColor=bg };
       shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,230));
@@ -144,14 +148,14 @@ namespace GioviGG {
         DrawMatches(store.Matches.OrderByDescending(m=>m.Date).Take(80).ToList(),125);
       }
       else {Section("GIOVI.GG v"+CurrentVersion,10);
-        AddText(content,"Novinky: Aktualizace přímo z GitHub Releases.",30,48,785,28,11,accent,true);
+        AddText(content,"Novinka v0.4.1: záloha statistik jedním kliknutím.",30,48,785,28,11,accent,true);
         Section("Updates",94);
         AddText(content,"Aktuální verze: v"+CurrentVersion,30,139,700,26,12,fg,true);
         AddText(content,updateMessage,30,169,760,58,10,muted);
         Button check=Action(content,"CHECK FOR UPDATES",30,230,230,43,()=>BeginUpdateCheck(false));check.Enabled=!updateBusy;
         if(availableUpdate!=null){Button install=Action(content,"INSTALL v"+availableUpdate.Number.ToString(),278,230,230,43,()=>StartUpdate());install.Enabled=!updateBusy;}
         Section("Monitoring",300);AddText(content,"Detekce Windows procesů probíhá každých 15 sekund. V tray aplikace běží dál.",30,345,790,46,11,muted);
-        Section("Your data",395);AddText(content,store.FileName,30,442,790,48,11,muted);Action(content,"OPEN DATA FOLDER",30,498,220,42,()=>Process.Start("explorer.exe",store.Folder));
+        Section("Your data",395);AddText(content,store.FileName,30,442,790,48,11,muted);Action(content,"OPEN DATA FOLDER",30,498,220,42,()=>Process.Start("explorer.exe",store.Folder));Action(content,"BACKUP STATS",270,498,220,42,()=>BackupStats());
         Section("Start with Windows",570);Action(content,AutoStartEnabled()?"DISABLE AUTOSTART":"ENABLE AUTOSTART",30,615,250,44,()=>{ToggleAutoStart();ShowPage("Settings");});
         Section("Limitations",700);AddText(content,"Herní čas se zaznamenává automaticky. Výsledky zápasů se zatím zadávají ručně.",30,750,790,32,11,muted);
         AddText(content,"Data jsou jen na tomto PC. Žádné napojení na Riot, Steam ani Ubisoft zatím není aktivní.",30,788,790,34,11,muted);
@@ -171,6 +175,24 @@ namespace GioviGG {
           }
           MessageBox.Show("Exportováno: "+dlg.FileName,"GIOVI.GG");
         }catch(Exception ex){MessageBox.Show(ex.Message,"CSV export error");}
+      }
+    }
+    // Optional user-initiated backup. Never moves or deletes the original tracker.xml.
+    void BackupStats(){
+      using(SaveFileDialog dlg=new SaveFileDialog()){
+        dlg.Filter="XML backup (*.xml)|*.xml";
+        dlg.FileName="GioviGG-backup-"+DateTime.Now.ToString("yyyy-MM-dd-HHmm")+".xml";
+        dlg.Title="Záloha statistik GIOVI.GG";
+        if(dlg.ShowDialog(this)!=DialogResult.OK)return;
+        try {
+          if(string.Equals(Path.GetFullPath(store.FileName),Path.GetFullPath(dlg.FileName),StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Vyber jiné umístění, než má původní tracker.xml.");
+          store.Save();
+          File.Copy(store.FileName,dlg.FileName,true);
+          MessageBox.Show(this,"Záloha statistik byla úspěšně uložena.","GIOVI.GG",MessageBoxButtons.OK,MessageBoxIcon.Information);
+        } catch(Exception ex) {
+          MessageBox.Show(this,"Záloha se nezdařila: "+ex.Message,"GIOVI.GG",MessageBoxButtons.OK,MessageBoxIcon.Error);
+        }
       }
     }
     void DeleteMatch(){
