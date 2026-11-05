@@ -8,6 +8,6 @@ if not exist "%CSC%" (
  pause
  exit /b 1
 )
-"%CSC%" /nologo /target:winexe /optimize+ /out:"GIOVI.GG.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.Xml.Linq.dll "GIOVI.GG.cs"
+"%CSC%" /nologo /target:winexe /optimize+ /out:"GIOVI.GG.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll /r:System.Security.dll "GIOVI.GG.cs"
 if errorlevel 1 (echo Build failed. & pause & exit /b 1)
 start "" "%~dp0GIOVI.GG.exe"

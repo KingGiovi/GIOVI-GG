@@ -6,6 +6,11 @@ using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using System.Xml.Linq;
+using System.Net;
+using System.Security.Cryptography;
+using System.Threading.Tasks;
+using System.Text;
+using System.Web.Script.Serialization;
 using Microsoft.Win32;
 
 namespace GioviGG {
@@ -40,7 +45,16 @@ namespace GioviGG {
       else System.IO.File.Move(temp, FileName);
     }
   }
+  class UpdateInfo {
+    public Version Number;
+    public string Tag, Notes, DownloadUrl, Digest;
+  }
   class App : Form {
+    const string CurrentVersion = "0.4.0";
+    const string ReleaseApi = "https://api.github.com/repos/KingGiovi/GIOVI-GG/releases/latest";
+    UpdateInfo availableUpdate;
+    bool updateBusy = false;
+    string updateMessage = "Zatím nezkontrolováno.";
     Color bg = Color.FromArgb(12,13,22), side = Color.FromArgb(20,22,35), card = Color.FromArgb(29,31,48), fg=Color.FromArgb(240,238,255), muted=Color.FromArgb(158,157,181), accent=Color.FromArgb(166,123,255), green=Color.FromArgb(104,220,167);
     string[] games = { "CS2", "LoL", "R6" };
     string[] names = { "Counter-Strike 2", "League of Legends", "Rainbow Six Siege" };
@@ -55,7 +69,7 @@ namespace GioviGG {
     string page = "Overview";
     bool exiting = false;
     public App() {
-      Text = "GIOVI.GG — Ultimate Gaming Hub v0.3"; Width = 1160; Height = 780; MinimumSize = new Size(1050,650); StartPosition = FormStartPosition.CenterScreen; BackColor = bg; ForeColor = fg; Font = new Font("Segoe UI", 10f);
+      Text = "GIOVI.GG — Ultimate Gaming Hub v0.4"; Width = 1160; Height = 780; MinimumSize = new Size(1050,650); StartPosition = FormStartPosition.CenterScreen; BackColor = bg; ForeColor = fg; Font = new Font("Segoe UI", 10f);
       // Fixed two-column layout: sidebar occupies its own column, never overlays content.
       TableLayoutPanel shell = new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=2, RowCount=1, Margin=new Padding(0), Padding=new Padding(0), BackColor=bg };
       shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,230));
@@ -88,6 +102,8 @@ namespace GioviGG {
       Resize+=(s,e)=>{ if (WindowState==FormWindowState.Minimized) { Hide();tray.BalloonTipTitle="GIOVI.GG";tray.BalloonTipText="Sledování her běží dál na pozadí.";tray.ShowBalloonTip(1500); } };
       FormClosing+=(s,e)=>{if(!exiting){e.Cancel=true;WindowState=FormWindowState.Minimized;Hide();}};
       Scan();ShowPage("Overview");
+      // Run the API request off the UI thread and notify once per launch if a newer release exists.
+      Shown += (sender, args) => BeginUpdateCheck(true);
     }
     Label Lbl(string t,float size,Color c,bool bold=false){ return new Label {Text=t,Font=new Font("Segoe UI",size,bold?FontStyle.Bold:FontStyle.Regular),ForeColor=c,BackColor=Color.Transparent,AutoEllipsis=true}; }
     Button Btn(string t,Color color){return new Button {Text=t,BackColor=color,ForeColor=Color.White,FlatStyle=FlatStyle.Flat,Font=new Font("Segoe UI",10,FontStyle.Bold),Cursor=Cursors.Hand,UseVisualStyleBackColor=false};}
@@ -127,15 +143,20 @@ namespace GioviGG {
         Action(content,"DELETE MATCH",225,62,180,40,()=>DeleteMatch());
         DrawMatches(store.Matches.OrderByDescending(m=>m.Date).Take(80).ToList(),125);
       }
-      else {Section("GIOVI.GG v0.3",10);
-        AddText(content,"Novinky: opravený layout, export statistik a mazání zápasů.",30,48,785,28,11,accent,true);
-        Section("Monitoring",100);AddText(content,"Detekce Windows procesů probíhá každých 15 sekund. V tray aplikace běží dál.",30,145,790,46,11,muted);
-        Section("Your data",190);AddText(content,store.FileName,30,238,790,48,11,muted);Action(content,"OPEN DATA FOLDER",30,295,220,42,()=>Process.Start("explorer.exe",store.Folder));
-        Section("Start with Windows",370);Action(content,AutoStartEnabled()?"DISABLE AUTOSTART":"ENABLE AUTOSTART",30,415,250,44,()=>{ToggleAutoStart();ShowPage("Settings");});
-        Section("Limitations",500);AddText(content,"Herní čas se zaznamenává automaticky. Výsledky zápasů se zatím zadávají ručně.",30,550,790,32,11,muted);
-        AddText(content,"Data jsou jen na tomto PC. Žádné napojení na Riot, Steam ani Ubisoft zatím není aktivní.",30,588,790,34,11,muted);
+      else {Section("GIOVI.GG v"+CurrentVersion,10);
+        AddText(content,"Novinky: Aktualizace přímo z GitHub Releases.",30,48,785,28,11,accent,true);
+        Section("Updates",94);
+        AddText(content,"Aktuální verze: v"+CurrentVersion,30,139,700,26,12,fg,true);
+        AddText(content,updateMessage,30,169,760,58,10,muted);
+        Button check=Action(content,"CHECK FOR UPDATES",30,230,230,43,()=>BeginUpdateCheck(false));check.Enabled=!updateBusy;
+        if(availableUpdate!=null){Button install=Action(content,"INSTALL v"+availableUpdate.Number.ToString(),278,230,230,43,()=>StartUpdate());install.Enabled=!updateBusy;}
+        Section("Monitoring",300);AddText(content,"Detekce Windows procesů probíhá každých 15 sekund. V tray aplikace běží dál.",30,345,790,46,11,muted);
+        Section("Your data",395);AddText(content,store.FileName,30,442,790,48,11,muted);Action(content,"OPEN DATA FOLDER",30,498,220,42,()=>Process.Start("explorer.exe",store.Folder));
+        Section("Start with Windows",570);Action(content,AutoStartEnabled()?"DISABLE AUTOSTART":"ENABLE AUTOSTART",30,615,250,44,()=>{ToggleAutoStart();ShowPage("Settings");});
+        Section("Limitations",700);AddText(content,"Herní čas se zaznamenává automaticky. Výsledky zápasů se zatím zadávají ručně.",30,750,790,32,11,muted);
+        AddText(content,"Data jsou jen na tomto PC. Žádné napojení na Riot, Steam ani Ubisoft zatím není aktivní.",30,788,790,34,11,muted);
       }
-      content.AutoScrollMinSize=new Size(780,p=="History"?Math.Max(700,170+store.Matches.Count*52):700);content.ResumeLayout();
+      content.AutoScrollMinSize=new Size(780,p=="History"?Math.Max(700,170+store.Matches.Count*52):(p=="Settings"?860:700));content.ResumeLayout();
     }
     void DrawMatches(List<Match> mm,int y){if(mm.Count==0){AddText(content,"Žádné zápasy. Přidej první přes dashboard hry.",30,y,750,36,11,muted);return;}foreach(Match m in mm){Panel row=Card(30,y,705,45);AddText(row,m.Game+"   "+m.Result.ToUpperInvariant(),14,9,192,27,11,m.Result=="Win"?green:Color.FromArgb(255,132,159),true);AddText(row,m.Kills+" / "+m.Deaths+" / "+m.Assists+"  K/D/A",220,9,240,27,11,fg,true);AddText(row,m.Date.Replace('T',' '),511,11,180,25,9,muted);y+=51;}}
     string Csv(string s){return "\""+(s??"").Replace("\"","\"\"")+"\"";}
@@ -167,6 +188,116 @@ namespace GioviGG {
       Action(dialog,"SAVE MATCH",22,365,338,42,()=>{store.Matches.Add(new Match{Game=g,Date=DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),Result=result.Text,Kills=(int)controls[0].Value,Deaths=(int)controls[1].Value,Assists=(int)controls[2].Value});try{store.Save();dialog.DialogResult=DialogResult.OK;dialog.Close();}catch(Exception ex){MessageBox.Show(ex.Message,"Chyba ukládání");}});
       if(dialog.ShowDialog(this)==DialogResult.OK)ShowPage(page);
     }}
+    // GitHub's public latest-release API is used only to discover signed-off official releases.
+    // We enforce HTTPS, a known asset name, a strict version check and a SHA256 digest.
+    void BeginUpdateCheck(bool automatic) {
+      if(updateBusy) return;
+      updateBusy=true;
+      updateMessage="Kontroluji GitHub Releases...";
+      if(page=="Settings") ShowPage("Settings");
+      Task.Run(() => {
+        UpdateInfo info=null; string error=null;
+        try { info=FetchLatest(); }
+        catch(Exception ex){ error=ex.Message; }
+        try { BeginInvoke((Action)(() => {
+          if(IsDisposed) return;
+          updateBusy=false;
+          if(error!=null){updateMessage="Kontrola se nezdařila: "+error;}
+          else if(info==null){availableUpdate=null; updateMessage="Máš nejnovější vydanou verzi (v"+CurrentVersion+").";}
+          else {availableUpdate=info; updateMessage="Dostupná aktualizace: "+info.Tag+". "+(info.Notes??"").Replace("\r"," ").Replace("\n"," ");}
+          if(page=="Settings") ShowPage("Settings");
+          if(automatic && info!=null){
+            if(MessageBox.Show(this,"Je dostupná nová verze "+info.Tag+".\n\nChceš ji teď stáhnout a nainstalovat?", "GIOVI.GG — Update",MessageBoxButtons.YesNo,MessageBoxIcon.Information)==DialogResult.Yes) StartUpdate();
+          }
+        })); } catch(InvalidOperationException) {} catch(ObjectDisposedException) {}
+      });
+    }
+    UpdateInfo FetchLatest(){
+      ServicePointManager.SecurityProtocol=(SecurityProtocolType)3072;
+      string json;
+      using(WebClient wc=new WebClient()){
+        wc.Headers[HttpRequestHeader.UserAgent]="GioviGG-Windows/"+CurrentVersion;
+        wc.Headers[HttpRequestHeader.Accept]="application/vnd.github+json";
+        json=wc.DownloadString(ReleaseApi);
+      }
+      var root=new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string,object>;
+      if(root==null || !root.ContainsKey("tag_name")) throw new Exception("Neplatná odpověď API.");
+      string tag=Convert.ToString(root["tag_name"]);
+      Version remote;
+      if(!Version.TryParse(tag.TrimStart('v','V'),out remote)) throw new Exception("Neplatné číslo verze.");
+      if(remote<=new Version(CurrentVersion)) return null;
+      object[] assets=root.ContainsKey("assets")?root["assets"] as object[]:null;
+      if(assets==null) throw new Exception("Release nemá přiložené soubory.");
+      foreach(object obj in assets){
+        var a=obj as Dictionary<string,object>;
+        if(a==null || !a.ContainsKey("name") || Convert.ToString(a["name"])!="GIOVI.GG.exe") continue;
+        string url=Convert.ToString(a["browser_download_url"]);
+        Uri uri;
+        if(!Uri.TryCreate(url,UriKind.Absolute,out uri) || uri.Scheme!="https" || !uri.Host.Equals("github.com",StringComparison.OrdinalIgnoreCase)) throw new Exception("Neočekávaná adresa souboru.");
+        string digest=a.ContainsKey("digest")?Convert.ToString(a["digest"]):"";
+        if(!digest.StartsWith("sha256:",StringComparison.OrdinalIgnoreCase) || digest.Length!=71) throw new Exception("Release nemá platný SHA256 digest. Z bezpečnostních důvodů nelze aktualizovat.");
+        string notes=root.ContainsKey("body")?Convert.ToString(root["body"]):"";
+        if(notes.Length>120) notes=notes.Substring(0,120)+"...";
+        return new UpdateInfo{Number=remote,Tag=tag,Notes=notes,DownloadUrl=url,Digest=digest.Substring(7).ToLowerInvariant()};
+      }
+      throw new Exception("Release "+tag+" neobsahuje GIOVI.GG.exe.");
+    }
+    static string HashOf(string path){
+      using(SHA256 hash=SHA256.Create())
+      using(FileStream fs=File.OpenRead(path)){
+        byte[] b=hash.ComputeHash(fs);return BitConverter.ToString(b).Replace("-","").ToLowerInvariant();
+      }
+    }
+    static string PsQuote(string val){return "'"+val.Replace("'","''")+"'";}
+    void StartUpdate(){
+      if(updateBusy || availableUpdate==null) return;
+      UpdateInfo info=availableUpdate;
+      updateBusy=true;updateMessage="Stahuji "+info.Tag+" a ověřuji SHA256...";
+      if(page=="Settings") ShowPage("Settings");
+      Task.Run(() => {
+        string error=null, downloaded=null;
+        try {
+          ServicePointManager.SecurityProtocol=(SecurityProtocolType)3072;
+          downloaded=Path.Combine(Path.GetTempPath(),"GioviGG-update-"+Guid.NewGuid().ToString("N")+".exe");
+          using(WebClient wc=new WebClient()){
+            wc.Headers[HttpRequestHeader.UserAgent]="GioviGG-Windows/"+CurrentVersion;
+            wc.DownloadFile(info.DownloadUrl,downloaded);
+          }
+          if(!string.Equals(HashOf(downloaded),info.Digest,StringComparison.OrdinalIgnoreCase)) throw new Exception("SHA256 kontrola selhala: stažený soubor se liší.");
+          if(new FileInfo(downloaded).Length<10240) throw new Exception("Stažený soubor je podezřele malý.");
+        }catch(Exception ex){error=ex.Message;}
+        string path=downloaded;
+        try {BeginInvoke((Action)(()=>{
+          if(IsDisposed) return;
+          if(error!=null){updateBusy=false;updateMessage="Aktualizace se nezdařila: "+error;if(page=="Settings")ShowPage("Settings");if(path!=null)try{File.Delete(path);}catch{};return;}
+          InstallDownloadedUpdate(path);
+        }));}catch(InvalidOperationException){}catch(ObjectDisposedException){}
+      });
+    }
+    void InstallDownloadedUpdate(string downloaded){
+      try {
+        string destination=Application.ExecutablePath;
+        // The running executable must be writable. We do not touch the user's LocalAppData stats.
+        string directory=Path.GetDirectoryName(destination);
+        string probe=Path.Combine(directory,".giovi-update-test-"+Guid.NewGuid().ToString("N"));
+        File.WriteAllText(probe,"");File.Delete(probe);
+        string scriptFile=Path.Combine(Path.GetTempPath(),"GioviGG-updater-"+Guid.NewGuid().ToString("N")+".ps1");
+        // The updater runs as a separate process because a running .exe cannot be replaced in-place.
+        string script=@"$ErrorActionPreference='Stop'"+"\r\n"+
+          "$src="+PsQuote(downloaded)+"\r\n"+
+          "$dst="+PsQuote(destination)+"\r\n"+
+          "$pidToWait="+Process.GetCurrentProcess().Id+"\r\n"+
+          "try { Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 600; " +
+          "$done=$false; for($i=0;$i -lt 30;$i++){ try { Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; $done=$true; break } catch { Start-Sleep -Milliseconds 500 } }; " +
+          "if(-not $done){throw 'Nepodařilo se nahradit EXE soubor.'}; Start-Process -FilePath $dst; Remove-Item -LiteralPath $src -Force -ErrorAction SilentlyContinue " +
+          "} catch { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'GIOVI.GG update error') | Out-Null }";
+        File.WriteAllText(scriptFile,script,Encoding.UTF8);
+        ProcessStartInfo psi=new ProcessStartInfo("powershell.exe","-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+scriptFile+"\"");
+        psi.UseShellExecute=false;psi.CreateNoWindow=true;
+        Process.Start(psi);
+        ExitApp();
+      }catch(Exception ex){updateBusy=false;updateMessage="Instalace selhala: "+ex.Message;if(page=="Settings")ShowPage("Settings");MessageBox.Show(this,ex.Message,"GIOVI.GG updater",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+    }
     void Scan(){try {HashSet<string> running=new HashSet<string>(Process.GetProcesses().Select(p=>{try{return p.ProcessName;}catch{return "";}}),StringComparer.OrdinalIgnoreCase);bool changed=false;DateTime now=DateTime.Now;
        for(int i=0;i<games.Length;i++){string g=games[i];bool found=processes[i].Any(exe=>running.Contains(exe));if(found&&!active.ContainsKey(g)){active[g]=now;changed=true;}else if(!found&&active.ContainsKey(g)){Finish(g,now);changed=true;}}
        if(changed){UpdateLiveStatus();ShowPage(page);}
