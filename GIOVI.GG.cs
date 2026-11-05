@@ -1318,10 +1318,9 @@ namespace GioviGG {
     string Cs2LiveText(){
       if(cs2State.SeenUtc==DateTime.MinValue || DateTime.UtcNow-cs2State.SeenUtc>TimeSpan.FromSeconds(40))
         return "Čekám na data z CS2. V Nastavení → Propojení nainstaluj GSI konfiguraci a restartuj CS2.";
-      return "MAPA: "+cs2State.Map+"
-FÁZE: "+cs2State.Phase+"     SKÓRE CT/T: "+cs2State.Ct+" : "+cs2State.T+
-        "
-TVÉ K/D/A: "+cs2State.Kills+" / "+cs2State.Deaths+" / "+cs2State.Assists;
+      return "MAPA: " + cs2State.Map + "\r\n" +
+        "FÁZE: " + cs2State.Phase + "     SKÓRE CT/T: " + cs2State.Ct + " : " + cs2State.T + "\r\n" +
+        "TVÉ K/D/A: " + cs2State.Kills + " / " + cs2State.Deaths + " / " + cs2State.Assists;
     }
     void ConfigureCs2Gsi(){
       if(cs2Receiver==null){MessageBox.Show(this,cs2Status,"CS2 GSI",MessageBoxButtons.OK,MessageBoxIcon.Warning);return;}
