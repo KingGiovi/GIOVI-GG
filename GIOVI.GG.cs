@@ -209,7 +209,7 @@ namespace GioviGG {
           if(automatic && info!=null){
             if(MessageBox.Show(this,"Je dostupná nová verze "+info.Tag+".\n\nChceš ji teď stáhnout a nainstalovat?", "GIOVI.GG — Update",MessageBoxButtons.YesNo,MessageBoxIcon.Information)==DialogResult.Yes) StartUpdate();
           }
-        })); } catch(InvalidOperationException) {} catch(ObjectDisposedException) {}
+        })); } catch(InvalidOperationException) {}
       });
     }
     UpdateInfo FetchLatest(){
@@ -271,7 +271,7 @@ namespace GioviGG {
           if(IsDisposed) return;
           if(error!=null){updateBusy=false;updateMessage="Aktualizace se nezdařila: "+error;if(page=="Settings")ShowPage("Settings");if(path!=null)try{File.Delete(path);}catch{};return;}
           InstallDownloadedUpdate(path);
-        }));}catch(InvalidOperationException){}catch(ObjectDisposedException){}
+        }));}catch(InvalidOperationException){}
       });
     }
     void InstallDownloadedUpdate(string downloaded){
