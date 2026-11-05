@@ -1,0 +1,25 @@
+name: Build GIOVI.GG Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile GIOVI.GG
+        shell: cmd
+        run: |
+          C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:GIOVI.GG.exe /reference:System.Windows.Forms.dll /reference:System.Drawing.dll GIOVI.GG.cs
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: GIOVI-GG-Windows
+          path: GIOVI.GG.exe
