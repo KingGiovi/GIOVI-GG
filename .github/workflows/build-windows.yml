@@ -1,25 +1,39 @@
-name: Build GIOVI.GG Windows
-
+name: Build Windows EXE
 on:
+  workflow_dispatch:
   push:
     branches: [main]
-  workflow_dispatch:
-
+    tags: ['v*']
+    paths:
+      - 'GIOVI.GG.cs'
+      - '.github/workflows/build-windows.yml'
+      - 'BUILD_AND_RUN.bat'
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Compile GIOVI.GG
+      - uses: actions/checkout@v4
+      - name: Compile GIOVI.GG.exe
         shell: cmd
         run: |
-          C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:GIOVI.GG.exe /reference:System.Windows.Forms.dll /reference:System.Drawing.dll GIOVI.GG.cs
-
-      - name: Upload EXE
+          "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /out:"GIOVI.GG.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll /r:System.Security.dll "GIOVI.GG.cs"
+      - name: Upload Windows EXE as Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: GIOVI-GG-Windows
           path: GIOVI.GG.exe
+          if-no-files-found: error
+      - name: Publish release for a version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release view "${{ github.ref_name }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "${{ github.ref_name }}" GIOVI.GG.exe --clobber
+          } else {
+            gh release create "${{ github.ref_name }}" GIOVI.GG.exe --title "GIOVI.GG ${{ github.ref_name }}" --generate-notes
+          }
